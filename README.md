@@ -35,7 +35,17 @@ The included instructions allow you to generate model pairs, simulate games, run
 1. **Generate Model Pairs:**
 
    ```bash
-   python -c "import itertools; models = [m.strip() for m in open('models.txt') if m.strip()]; print('\n'.join(' '.join(pair) for pair in itertools.combinations(models, 2)))" > model_pairs.txt
+   # Generate all possible matchups, 3 rounds each
+   python cli/generate_matchups.py --rounds 3
+
+   # Same thing but with custom input and output files
+   python cli/generate_matchups.py --rounds 3 --input my_models.txt --output my_matchups.txt
+
+   # Generate matchups for gemini-2.0-flash against all other models, 2 rounds each
+   python cli/generate_matchups.py --mode single --model gemini-2.0-flash --rounds 2
+
+   # Same thing but with custom input and output files
+   python cli/generate_matchups.py --mode single --model gemini-2.0-flash --rounds 2 --input my_models.txt --output gpt4_matchups.txt
    ```
 
 2. **Run a Single Game:**
