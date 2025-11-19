@@ -360,3 +360,148 @@ def get_total_games_count() -> int:
 
     finally:
         conn.close()
+
+
+def get_live_games() -> List[Dict[str, Any]]:
+    """
+    Retrieve all games currently in progress.
+
+    Returns:
+        List of live game dictionaries with current state
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("""
+            SELECT
+                g.id,
+                g.start_time,
+                g.current_round,
+                g.current_state,
+                g.board_width,
+                g.board_height,
+                g.num_apples,
+                g.total_cost,
+                g.created_at
+            FROM games g
+            WHERE g.status = 'in_progress'
+            ORDER BY g.start_time DESC
+        """)
+
+        games = []
+        for row in cursor.fetchall():
+            game = {
+                'id': row['id'],
+                'start_time': str(row['start_time']) if row['start_time'] else None,
+                'current_round': row['current_round'],
+                'current_state': row['current_state'],
+                'board_width': row['board_width'],
+                'board_height': row['board_height'],
+                'num_apples': row['num_apples'],
+                'total_cost': row['total_cost'],
+                'created_at': str(row['created_at']) if row['created_at'] else None,
+                'participants': []
+            }
+
+            # Get participants for this game
+            cursor.execute("""
+                SELECT
+                    m.name,
+                    m.provider,
+                    gp.player_slot,
+                    gp.score
+                FROM game_participants gp
+                JOIN models m ON gp.model_id = m.id
+                WHERE gp.game_id = %s
+                ORDER BY gp.player_slot
+            """, (game['id'],))
+
+            for participant_row in cursor.fetchall():
+                game['participants'].append({
+                    'model_name': participant_row['name'],
+                    'provider': participant_row['provider'],
+                    'player_slot': participant_row['player_slot'],
+                    'score': participant_row['score']
+                })
+
+            games.append(game)
+
+        return games
+
+    finally:
+        conn.close()
+
+
+def get_live_game_state(game_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Get the current state of a specific in-progress game.
+
+    Args:
+        game_id: The game identifier
+
+    Returns:
+        Game dictionary with current state, or None if not found or not in progress
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("""
+            SELECT
+                g.id,
+                g.start_time,
+                g.current_round,
+                g.current_state,
+                g.board_width,
+                g.board_height,
+                g.num_apples,
+                g.total_cost,
+                g.created_at
+            FROM games g
+            WHERE g.id = %s AND g.status = 'in_progress'
+        """, (game_id,))
+
+        row = cursor.fetchone()
+
+        if row is None:
+            return None
+
+        game = {
+            'id': row['id'],
+            'start_time': str(row['start_time']) if row['start_time'] else None,
+            'current_round': row['current_round'],
+            'current_state': row['current_state'],
+            'board_width': row['board_width'],
+            'board_height': row['board_height'],
+            'num_apples': row['num_apples'],
+            'total_cost': row['total_cost'],
+            'created_at': str(row['created_at']) if row['created_at'] else None,
+            'participants': []
+        }
+
+        # Get participants
+        cursor.execute("""
+            SELECT
+                m.name,
+                m.provider,
+                gp.player_slot,
+                gp.score
+            FROM game_participants gp
+            JOIN models m ON gp.model_id = m.id
+            WHERE gp.game_id = %s
+            ORDER BY gp.player_slot
+        """, (game_id,))
+
+        for participant_row in cursor.fetchall():
+            game['participants'].append({
+                'model_name': participant_row['name'],
+                'provider': participant_row['provider'],
+                'player_slot': participant_row['player_slot'],
+                'score': participant_row['score']
+            })
+
+        return game
+
+    finally:
+        conn.close()

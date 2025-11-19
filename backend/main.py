@@ -19,7 +19,10 @@ try:
         insert_game,
         insert_game_participants,
         update_model_aggregates,
-        update_elo_ratings
+        update_elo_ratings,
+        start_live_game,
+        update_live_game_state,
+        complete_live_game
     )
     DB_AVAILABLE = True
 except ImportError as e:
@@ -372,6 +375,66 @@ class SnakeGame:
         player_name = getattr(player, 'name', None) or getattr(player, 'model_name', None) or player.__class__.__name__
         print(f"Added snake '{snake_id}' ({player_name}) at {positions}.")
 
+    def start_live_tracking(self):
+        """
+        Initialize live game tracking in the database.
+        Should be called after all snakes have been added.
+        """
+        if not DB_AVAILABLE:
+            return
+
+        try:
+            start_dt = datetime.fromtimestamp(self.start_time)
+            participant_models = []
+
+            for snake_id, player in self.players.items():
+                model_name = self.clean_model_name(
+                    getattr(player, 'name', None) or
+                    getattr(player, 'model_name', None) or
+                    player.__class__.__name__
+                )
+                participant_models.append(model_name)
+
+            start_live_game(
+                game_id=self.game_id,
+                start_time=start_dt,
+                board_width=self.width,
+                board_height=self.height,
+                num_apples=self.num_apples,
+                participant_models=participant_models
+            )
+            print(f"✓ Started live tracking for game {self.game_id}")
+        except Exception as e:
+            print(f"✗ Failed to start live tracking: {e}")
+
+    def update_live_state(self):
+        """
+        Update the current state of the game in the database.
+        Called after each round to provide live updates.
+        """
+        if not DB_AVAILABLE:
+            return
+
+        try:
+            # Build current state snapshot
+            current_state = {
+                "round": self.round_number,
+                "scores": self.scores,
+                "alive": {sid: snake.alive for sid, snake in self.snakes.items()},
+                "apples": self.apples,
+                "snake_positions": {sid: list(snake.positions) for sid, snake in self.snakes.items()}
+            }
+
+            update_live_game_state(
+                game_id=self.game_id,
+                current_round=self.round_number,
+                current_state=current_state,
+                total_cost=self.total_cost
+            )
+        except Exception as e:
+            # Don't fail the game if live tracking fails
+            print(f"✗ Failed to update live state: {e}")
+
     def set_apples(self, apple_positions: List[Tuple[int,int]]):
         """
         Initialize the board with multiple apples at specified positions.
@@ -621,6 +684,10 @@ class SnakeGame:
             self.end_game("All but one snake are dead.")
 
         print(f"Finished round {self.round_number}. Alive: {alive_snakes}, Scores: {self.scores}")
+
+        # Update live game state in database
+        self.update_live_state()
+
         time.sleep(0.3)
 
     def serialize_history(self, history):
@@ -721,26 +788,39 @@ class SnakeGame:
             return
 
         try:
-            # 1. Insert game record
-            start_dt = datetime.fromtimestamp(self.start_time)
+            # 1. Complete the live game (or insert if not started)
             end_dt = datetime.fromtimestamp(time.time())
-
-            # Use Supabase storage path if available, fall back to local path
-            replay_path = getattr(self, 'replay_storage_path', f"completed_games/snake_game_{self.game_id}.json")
             total_score = sum(self.scores.values())
 
-            insert_game(
-                game_id=self.game_id,
-                start_time=start_dt,
-                end_time=end_dt,
-                rounds=self.round_number,
-                replay_path=replay_path,
-                board_width=self.width,
-                board_height=self.height,
-                num_apples=self.num_apples,
-                total_score=total_score,
-                total_cost=self.total_cost
-            )
+            # Try to complete as a live game first
+            try:
+                complete_live_game(
+                    game_id=self.game_id,
+                    end_time=end_dt,
+                    rounds=self.round_number,
+                    total_score=total_score,
+                    total_cost=self.total_cost
+                )
+            except Exception as e:
+                # If completing live game fails (e.g., game wasn't started as live),
+                # fall back to inserting as a completed game
+                print(f"Live game completion failed, inserting as completed game: {e}")
+                start_dt = datetime.fromtimestamp(self.start_time)
+                replay_path = getattr(self, 'replay_storage_path', f"completed_games/snake_game_{self.game_id}.json")
+
+                insert_game(
+                    game_id=self.game_id,
+                    start_time=start_dt,
+                    end_time=end_dt,
+                    rounds=self.round_number,
+                    replay_path=replay_path,
+                    board_width=self.width,
+                    board_height=self.height,
+                    num_apples=self.num_apples,
+                    total_score=total_score,
+                    total_cost=self.total_cost,
+                    status='completed'
+                )
 
             # 2. Insert game participants
             participants = []
@@ -838,6 +918,9 @@ def run_simulation(model_config_1: Dict, model_config_2: Dict, game_params: argp
             snake_id=str(i),
             player=LLMPlayer(str(i), player_config=player_config)
         )
+
+    # Start live tracking now that all players are added
+    game.start_live_tracking()
 
     # Run the game loop
     while not game.game_over:

@@ -11,7 +11,9 @@ from data_access.api_queries import (
     get_model_by_name,
     get_games,
     get_game_by_id,
-    get_total_games_count
+    get_total_games_count,
+    get_live_games,
+    get_live_game_state
 )
 from database_postgres import get_connection
 
@@ -357,6 +359,47 @@ def get_game_by_id_endpoint(match_id):
     except Exception as error:
         logging.error(f"Error reading match data for match id {match_id}: {error}")
         return jsonify({"error": "Failed to load match data"}), 500
+
+
+# Live game tracking endpoints
+@app.route("/api/live-games", methods=["GET"])
+def get_live_games_endpoint():
+    """
+    Get all games currently in progress with their current state.
+
+    Returns:
+        List of in-progress games with real-time state updates
+    """
+    try:
+        live_games = get_live_games()
+        return jsonify({"games": live_games})
+    except Exception as error:
+        logging.error(f"Error fetching live games: {error}")
+        return jsonify({"error": "Failed to load live games"}), 500
+
+
+@app.route("/api/live-games/<game_id>", methods=["GET"])
+def get_live_game_state_endpoint(game_id):
+    """
+    Get the current state of a specific in-progress game.
+
+    Args:
+        game_id: The game identifier
+
+    Returns:
+        Current game state with round-by-round updates
+    """
+    try:
+        game_state = get_live_game_state(game_id)
+
+        if game_state is None:
+            return jsonify({"error": f"Live game '{game_id}' not found or not in progress"}), 404
+
+        return jsonify(game_state)
+    except Exception as error:
+        logging.error(f"Error fetching live game state for {game_id}: {error}")
+        return jsonify({"error": "Failed to load live game state"}), 500
+
 
 if __name__ == "__main__":
     # Run the Flask app in debug mode.
