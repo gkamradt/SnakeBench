@@ -2,6 +2,7 @@ import { ReactNode } from 'react'
 import Navbar from "@/components/layout/Navbar"
 import Footer from "@/components/layout/Footer"
 import './globals.css'
+import 'katex/dist/katex.min.css'
 import { PostHogProvider } from "./providers";
 import { Press_Start_2P } from "next/font/google"
 
