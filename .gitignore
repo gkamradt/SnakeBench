@@ -12,3 +12,4 @@ backend/llmsnake.db
 backend/llmsnake.db-shm
 backend/llmsnake.db-wal
 /data/
+.env
