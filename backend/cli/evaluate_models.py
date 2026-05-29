@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
 """
-Evaluate untested/testing models using confidence-weighted placement.
+Evaluate untested/testing models using noisy binary search placement.
 
-This system:
-  - Uses probabilistic skill estimates instead of hard binary bounds
-  - Weights game results by confidence (score differential, death type, game length)
-  - Selects opponents to maximize information gain
-  - Allows rematches for fluky losses
-  - Is more forgiving of variance in snake games
+For each model in ('untested', 'testing'):
+  1. Build/replay a posterior over its rank in the existing ranked pool
+     (placement_system maintains the math).
+  2. If the posterior is sharp enough or the budget is exhausted, finalize
+     (set test_status='ranked').
+  3. Otherwise pick the weighted-median opponent and dispatch ONE evaluation
+     game via Celery.
 
-This script:
-  - Selects up to N models in states ('untested', 'testing') and is_active = TRUE.
-  - Reconstructs placement state from completed evaluation games (game_type = 'evaluation').
-  - Dispatches exactly one new evaluation game per model when needed (Celery task).
-  - Finalizes models (test_status -> 'ranked') when their budget is exhausted.
-
-Idempotent: if interrupted, rerun and it will pick up from history.
+Idempotent: if interrupted, rerun and the next pass will pick up from the
+completed-game history.
 """
 
 import argparse
@@ -30,12 +26,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database_postgres import get_connection
 from tasks import run_game_task
 from placement_system import (
-    init_placement_state,
-    select_next_opponent_with_reason,
-    update_placement_state,
-    rebuild_state_from_history,
-    get_ranked_models_by_index,
+    get_ranked_pool,
     get_opponent_rank_index,
+    rebuild_state_from_history,
+    select_next_opponent_with_reason,
+    should_finalize,
     format_state_summary,
     PlacementState,
 )
@@ -160,9 +155,13 @@ def mark_status(conn, model_id: int, status: str) -> None:
 def finalize_model(conn, model_id: int, model_name: str, state: PlacementState) -> None:
     """Finalize model and print summary."""
     mark_status(conn, model_id, "ranked")
+    lo, hi = state.credible_interval_90
     print(f"Finalized: {model_name}")
-    print(f"  Final rating: mu={state.mu:.1f} sigma={state.sigma:.1f} exposed={state.exposed:.1f}")
-    print(f"  Win-loss-tie from {state.games_played} games")
+    print(
+        f"  Posterior median rank: {state.median_rank} "
+        f"(90% CI [{lo}, {hi}], entropy {state.entropy_bits:.2f} bits) "
+        f"after {state.games_played} games"
+    )
 
 
 def _reserve_eval_game_row(
@@ -311,7 +310,7 @@ def run_evaluation_batch(
         "enqueued": [],  # list of {model_name, opponent_name, task_id}
         "finalized": [],  # list of model names
         "pending_skipped": [],  # models skipped due to in-flight eval
-        "rematches": [],  # models with rematch scheduled
+        "rematches": [],  # kept for webhook compatibility; always empty now
         "errors": [],  # string messages
         "no_ranked": False,
         "no_candidates": False,
@@ -319,9 +318,8 @@ def run_evaluation_batch(
 
     conn = get_connection()
     try:
-        ranked_models = get_ranked_models_by_index()
-        ranked_count = len(ranked_models)
-        if ranked_count == 0:
+        ranked_pool = get_ranked_pool()
+        if not ranked_pool:
             stats["no_ranked"] = True
             printer("No ranked models available to compare against. Aborting.")
             return stats
@@ -346,99 +344,68 @@ def run_evaluation_batch(
 
             printer(f"\n=== Evaluating {model_name} (status: {status}) ===")
 
-            # Fetch detailed history for confidence scoring
-            history = fetch_eval_history(conn, model_id)
-
-            # Rebuild state using confidence-weighted system
-            state, completed = rebuild_state_from_history(
-                model_id,
-                max_games=max_games,
-                history=history,
-                ranked_models=ranked_models
-            )
-
-            # Print state summary
-            printer(f"  {format_state_summary(state)}")
-
-            # Check if evaluation is complete (always check, even with pending games)
-            if completed >= max_games:
-                finalize_model(conn, model_id, model_name, state)
-                stats["finalized"].append(model_name)
-                continue
-
-            # Check for pending games before enqueuing more
-            pending = has_pending_eval_game(conn, model_id)
-            if pending:
-                printer("  Pending evaluation game in progress; skipping enqueue.")
-                stats["pending_skipped"].append(model_name)
-                continue
-
-            # Build pricing tuple for pricing-based targeting
+            # Pricing prior for placement (weak Gaussian centered on cohort)
             pricing_in = candidate.get("pricing_input")
             pricing_out = candidate.get("pricing_output")
             model_pricing = None
             if pricing_in is not None and pricing_out is not None:
                 model_pricing = (float(pricing_in), float(pricing_out))
 
-            # Select next opponent using information gain
-            opponent, debug = select_next_opponent_with_reason(
-                state, ranked_models=ranked_models, model_pricing=model_pricing
+            # Replay completed-game history through the Bayes update
+            history = fetch_eval_history(conn, model_id)
+            state, completed = rebuild_state_from_history(
+                model_id,
+                max_games=max_games,
+                history=history,
+                ranked_pool=ranked_pool,
+                model_pricing=model_pricing,
             )
+
+            printer(f"  {format_state_summary(state)}")
+
+            # Finalize if budget exhausted or posterior is sharp
+            if should_finalize(state):
+                finalize_model(conn, model_id, model_name, state)
+                stats["finalized"].append(model_name)
+                continue
+
+            # Don't enqueue if one is already in flight
+            pending = has_pending_eval_game(conn, model_id)
+            if pending:
+                printer("  Pending evaluation game in progress; skipping enqueue.")
+                stats["pending_skipped"].append(model_name)
+                continue
+
+            # Pick the next opponent: weighted-median split
+            opponent, debug = select_next_opponent_with_reason(state, ranked_pool)
             if not opponent:
                 printer("  No suitable opponent found; finalizing.")
                 finalize_model(conn, model_id, model_name, state)
                 stats["finalized"].append(model_name)
                 continue
 
-            opponent_id = opponent['id']
-            opponent_name = opponent['name']
-            opponent_rating = opponent['rating']
-            opponent_rank = opponent['rank_index']
-
-            # Check if this is a rematch
-            is_rematch = state.pending_rematch == opponent_id
-            if is_rematch:
-                printer(f"  REMATCH scheduled with {opponent_name}")
-                stats["rematches"].append(model_name)
-
-            interval = debug.get("interval")
-            target_rating = debug.get("target_rating")
-            distance = debug.get("distance_to_target")
-            info_gain = debug.get("info_gain")
-            probe = debug.get("probe")
-            pc = debug.get("play_count")
-            selection_meta = []
-            if probe:
-                selection_meta.append(f"probe={probe}")
-            if target_rating is not None and interval:
-                selection_meta.append(
-                    f"target={target_rating:.1f} interval=[{interval[0]:.1f}, {interval[1]:.1f}]"
-                )
-            if distance is not None:
-                selection_meta.append(f"dist={distance:.1f}")
-            if info_gain is not None:
-                selection_meta.append(f"info={info_gain:.3f}")
-            if pc is not None:
-                selection_meta.append(f"played={pc}")
-
-            meta_str = f" [{' | '.join(selection_meta)}]" if selection_meta else ""
+            opponent_id = opponent["id"]
+            opponent_name = opponent["name"]
+            opponent_skill = opponent["skill"]
+            opponent_rank = opponent["rank_index"]
 
             printer(
-                f"  Next opponent: {opponent_name} (rank #{opponent_rank}, rating {opponent_rating:.1f})"
-                f"{' [REMATCH]' if is_rematch else ''}{meta_str}"
+                f"  Next opponent: {opponent_name} (rank #{opponent_rank}, "
+                f"skill {opponent_skill:.1f}) "
+                f"[target_rank={debug.get('target_rank')} "
+                f"target_skill={debug.get('target_skill', 0):.1f} "
+                f"played={debug.get('play_count')}]"
             )
 
-            # Get model's current rank (None for untested/testing models)
-            model_rank_index = get_opponent_rank_index(model_id, ranked_models=ranked_models)
-
+            # The model being placed has no rank yet, so model_rank_at_match is None.
             try:
                 task_id = dispatch_eval_game(
                     model_name,
                     opponent_name,
                     game_params,
-                    model_rank_at_match=model_rank_index,
+                    model_rank_at_match=None,
                     opponent_rank_at_match=opponent_rank,
-                    opponent_rating_at_match=opponent_rating,
+                    opponent_rating_at_match=opponent_skill,
                 )
                 printer(f"  Enqueued Celery task: {task_id}")
                 stats["enqueued"].append(
@@ -446,7 +413,7 @@ def run_evaluation_batch(
                         "model_name": model_name,
                         "opponent_name": opponent_name,
                         "task_id": task_id,
-                        "is_rematch": is_rematch,
+                        "is_rematch": False,
                     }
                 )
             except Exception as e:
@@ -476,8 +443,8 @@ def main():
     parser.add_argument(
         "--max-games",
         type=int,
-        default=9,
-        help="Max evaluation games per model (default: 9).",
+        default=10,
+        help="Max evaluation games per model (default: 10).",
     )
     parser.add_argument("--width", type=int, default=10, help="Board width.")
     parser.add_argument("--height", type=int, default=10, help="Board height.")
@@ -491,7 +458,8 @@ def main():
     args = parser.parse_args()
 
     print("=" * 60)
-    print("Confidence-Weighted Placement System")
+    print("Noisy Binary Search Placement (β={:.1f})".format(__import__(
+        "placement_system").NOISE_BETA))
     print("=" * 60)
 
     stats = run_evaluation_batch(
