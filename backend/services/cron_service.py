@@ -92,16 +92,21 @@ def _run_db(action: Callable[[Any, Any], T], *, commit: bool = False, retries: i
 
 
 def _fetch_stale_game_ids(threshold: datetime) -> List[str]:
-    """Return ids of in-progress games that have not updated since threshold."""
+    """
+    Return ids of stale games. Includes both:
+      - 'in_progress' games whose last update is older than threshold
+      - 'queued' games (eval placeholders) older than threshold, meaning the
+        Celery task was likely dropped before a worker picked it up.
+    """
     def _query(_: Any, cursor: Any) -> List[str]:
         cursor.execute(
             """
             SELECT id
             FROM games
-            WHERE status = 'in_progress'
-              AND updated_at < %s
+            WHERE (status = 'in_progress' AND updated_at < %s)
+               OR (status = 'queued' AND COALESCE(updated_at, start_time) < %s)
             """,
-            (threshold,),
+            (threshold, threshold),
         )
         rows = cursor.fetchall()
         return [row["id"] for row in rows]

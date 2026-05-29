@@ -96,6 +96,14 @@ class GameRepository(BaseRepository):
                 INSERT INTO games (
                     id, status, start_time, board_width, board_height, num_apples, game_type
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    start_time = EXCLUDED.start_time,
+                    board_width = EXCLUDED.board_width,
+                    board_height = EXCLUDED.board_height,
+                    num_apples = EXCLUDED.num_apples,
+                    game_type = EXCLUDED.game_type,
+                    updated_at = NOW()
             """, (
                 game_id,
                 status,
@@ -544,6 +552,9 @@ class GameRepository(BaseRepository):
                     INSERT INTO game_participants (
                         game_id, model_id, player_slot, score, result, opponent_rank_at_match
                     ) VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (game_id, player_slot) DO UPDATE SET
+                        model_id = EXCLUDED.model_id,
+                        opponent_rank_at_match = EXCLUDED.opponent_rank_at_match
                 """, (
                     game_id,
                     model_id,

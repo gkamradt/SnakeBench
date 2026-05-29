@@ -21,6 +21,7 @@ Idempotent: if interrupted, rerun and it will pick up from history.
 import argparse
 import sys
 import os
+import uuid
 from typing import Dict, List, Optional, Tuple
 
 # Add parent directory to path for imports
@@ -164,6 +165,81 @@ def finalize_model(conn, model_id: int, model_name: str, state: PlacementState) 
     print(f"  Win-loss-tie from {state.games_played} games")
 
 
+def _reserve_eval_game_row(
+    game_id: str,
+    model_a_name: str,
+    model_b_name: str,
+    game_params: Dict[str, int],
+    model_rank_at_match: Optional[int],
+    opponent_rank_at_match: Optional[int],
+) -> None:
+    """
+    Pre-insert a placeholder games + game_participants row with status='queued'
+    BEFORE enqueueing the Celery task.
+
+    This closes the race between Celery enqueue and worker pickup: while the
+    task sits in the queue, has_pending_eval_game() will see this row and skip
+    re-dispatching the same model. The worker's insert_initial_game() /
+    insert_initial_participants() are now UPSERTs and will reconcile this row.
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Look up model ids
+        cursor.execute("SELECT id FROM models WHERE name = %s", (model_a_name,))
+        row = cursor.fetchone()
+        if row is None:
+            raise ValueError(f"Model not found: {model_a_name}")
+        model_a_id = row["id"]
+
+        cursor.execute("SELECT id FROM models WHERE name = %s", (model_b_name,))
+        row = cursor.fetchone()
+        if row is None:
+            raise ValueError(f"Model not found: {model_b_name}")
+        model_b_id = row["id"]
+
+        # Insert the games row in 'queued' state
+        cursor.execute(
+            """
+            INSERT INTO games (
+                id, status, start_time, board_width, board_height,
+                num_apples, game_type
+            )
+            VALUES (%s, 'queued', NOW(), %s, %s, %s, 'evaluation')
+            ON CONFLICT (id) DO NOTHING
+            """,
+            (
+                game_id,
+                game_params["width"],
+                game_params["height"],
+                game_params["num_apples"],
+            ),
+        )
+
+        # Insert participants
+        cursor.execute(
+            """
+            INSERT INTO game_participants (
+                game_id, model_id, player_slot, score, result, opponent_rank_at_match
+            )
+            VALUES (%s, %s, 0, 0, 'tied', %s),
+                   (%s, %s, 1, 0, 'tied', %s)
+            ON CONFLICT (game_id, player_slot) DO NOTHING
+            """,
+            (
+                game_id, model_a_id, model_rank_at_match,
+                game_id, model_b_id, opponent_rank_at_match,
+            ),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def dispatch_eval_game(
     model_name: str,
     opponent_name: str,
@@ -174,6 +250,9 @@ def dispatch_eval_game(
 ) -> str:
     """
     Enqueue a single evaluation game between two named models.
+
+    Pre-inserts a 'queued' games row + participants so has_pending_eval_game()
+    detects the in-flight game while the Celery task is still in the broker.
     Returns Celery task ID.
     """
     config_a = get_model_by_name(model_name)
@@ -182,9 +261,21 @@ def dispatch_eval_game(
     if config_a is None or config_b is None:
         raise ValueError(f"Could not load configs for {model_name} vs {opponent_name}")
 
+    # Pre-allocate the game_id and reserve the DB row BEFORE enqueueing.
+    game_id = str(uuid.uuid4())
+    _reserve_eval_game_row(
+        game_id=game_id,
+        model_a_name=model_name,
+        model_b_name=opponent_name,
+        game_params=game_params,
+        model_rank_at_match=model_rank_at_match,
+        opponent_rank_at_match=opponent_rank_at_match,
+    )
+
     # Add rank and rating information to game_params for storage during game creation
     enhanced_params = {
         **game_params,
+        "game_id": game_id,
         "game_type": "evaluation",
         "player_ranks": {
             "0": model_rank_at_match,  # Player 0 is model_a
