@@ -59,14 +59,29 @@ NOISE_BETA = 4.0
 # normally rotates opponents on its own; this is a safety net only.
 MAX_REPEATS_PER_OPPONENT = 2
 
-# Width of pricing-tier prior as a fraction of pool size. Larger = weaker prior
-# (more uniform). 0.3 means ±30% of the pool is within 1σ of the seed rank,
-# so the prior is informative but easily overridden by even one decisive game.
-PRICING_PRIOR_SIGMA_FRAC = 0.3
+# Width of the pricing-tier Gaussian prior, as a fraction of pool size.
+# Larger ⇒ weaker (more uniform) prior. 0.3 means ±30% of the pool is within
+# 1σ of the seed rank — informative but easily overridden by one decisive game.
+PRICING_PRIOR_SIGMA_FRAC = 0.30
+
+# Frontier-tier override: if a model's cost is in the most expensive decile of
+# the ranked pool we use a tighter, higher-anchored prior (saves 3-4 climb
+# games on Opus-class models that almost certainly belong near the top).
+FRONTIER_PRICING_PERCENTILE = 0.10           # top 10% of pool by cost
+FRONTIER_PRIOR_SEED_FRAC = 0.05              # seed rank ≈ 5% of N (top of leaderboard)
+FRONTIER_PRIOR_SIGMA_FRAC = 0.15             # half as wide as the generic prior
 
 # Below this entropy (bits) we consider the posterior "sharp enough" to stop
-# early; we still respect max_games as the upper bound.
+# early; we still respect the (possibly-extended) game budget as the upper bound.
 EARLY_STOP_ENTROPY_BITS = 1.5
+
+# Adaptive budget: a model whose posterior median lands in the top of the
+# leaderboard AND is still uncertain after the base budget gets up to N more
+# games to resolve the top-of-ladder fight. Triggered conservatively so this
+# only fires for genuine "fighting for #1" cases, not every mid-pack model.
+EXTENDED_BUDGET_RANK_THRESHOLD = 10           # median must be in top 10
+EXTENDED_BUDGET_ENTROPY_THRESHOLD = 2.5       # posterior must still be unsharp
+EXTENDED_BUDGET_MAX_EXTRA_GAMES = 3           # at most this many extra games
 
 
 # =============================================================================
@@ -158,6 +173,38 @@ def get_ranked_pool() -> List[Dict[str, Any]]:
 # Prior construction
 # =============================================================================
 
+def _model_cost(pricing: Optional[Tuple[float, float]]) -> Optional[float]:
+    """Return total cost (input + output) per model_pricing tuple, or None."""
+    if pricing is None:
+        return None
+    p_in, p_out = pricing
+    cost = (p_in or 0) + (p_out or 0)
+    return float(cost) if cost > 0 else None
+
+
+def _is_frontier_tier(
+    model_pricing: Optional[Tuple[float, float]],
+    ranked_pool: List[Dict[str, Any]],
+) -> bool:
+    """
+    True if the model's cost is in the top FRONTIER_PRICING_PERCENTILE of
+    the ranked pool. Used to choose between the generic pricing-cohort prior
+    and a tighter top-anchored prior.
+    """
+    model_cost = _model_cost(model_pricing)
+    if model_cost is None or not ranked_pool:
+        return False
+    pool_costs = []
+    for m in ranked_pool:
+        c = _model_cost((m.get("pricing_input"), m.get("pricing_output")))
+        if c is not None:
+            pool_costs.append(c)
+    if not pool_costs:
+        return False
+    cutoff = float(np.quantile(pool_costs, 1.0 - FRONTIER_PRICING_PERCENTILE))
+    return model_cost >= cutoff
+
+
 def _pricing_seed_rank(
     model_pricing: Optional[Tuple[float, float]],
     ranked_pool: List[Dict[str, Any]],
@@ -169,20 +216,15 @@ def _pricing_seed_rank(
     0.5 log10 of the new model's cost. Returns None if pricing is missing
     or no cohort matches.
     """
-    if model_pricing is None or not ranked_pool:
+    model_cost = _model_cost(model_pricing)
+    if model_cost is None or not ranked_pool:
         return None
-    p_in, p_out = model_pricing
-    cost = (p_in or 0) + (p_out or 0)
-    if cost <= 0:
-        return None
-    log_cost = math.log10(cost)
+    log_cost = math.log10(model_cost)
 
     cohort_ranks: List[int] = []
     for m in ranked_pool:
-        m_in = m.get("pricing_input") or 0
-        m_out = m.get("pricing_output") or 0
-        m_cost = float(m_in) + float(m_out)
-        if m_cost <= 0:
+        m_cost = _model_cost((m.get("pricing_input"), m.get("pricing_output")))
+        if m_cost is None:
             continue
         if abs(math.log10(m_cost) - log_cost) <= 0.5:
             cohort_ranks.append(m["rank_index"])
@@ -196,24 +238,43 @@ def _pricing_seed_rank(
 def _build_prior(
     n_ranked: int,
     seed_rank: Optional[int],
+    sigma_frac: float = PRICING_PRIOR_SIGMA_FRAC,
 ) -> np.ndarray:
     """
     Build the initial posterior over ranks.
 
-    - If we have a pricing seed, use a wide Gaussian centered on it
-      (σ = PRICING_PRIOR_SIGMA_FRAC * N).
-    - Otherwise uniform.
+    Gaussian centered on `seed_rank` with σ = sigma_frac * N, or uniform if
+    `seed_rank` is None.
     """
     if n_ranked <= 0:
         return np.array([])
     if seed_rank is None:
         return np.ones(n_ranked) / n_ranked
 
-    sigma = max(PRICING_PRIOR_SIGMA_FRAC * n_ranked, 5.0)
+    sigma = max(sigma_frac * n_ranked, 5.0)
     x = np.arange(n_ranked, dtype=float)
     prior = np.exp(-0.5 * ((x - seed_rank) / sigma) ** 2)
     s = prior.sum()
     return prior / s if s > 0 else np.ones(n_ranked) / n_ranked
+
+
+def _build_pricing_prior(
+    n_ranked: int,
+    model_pricing: Optional[Tuple[float, float]],
+    ranked_pool: List[Dict[str, Any]],
+) -> np.ndarray:
+    """
+    Build the prior from pricing information. Returns:
+      - Frontier-tier prior (tight, anchored near top) if the model's cost is
+        in the top decile of the ranked pool.
+      - Pricing-cohort prior (wide Gaussian on cohort median) otherwise.
+      - Uniform prior if pricing data is missing.
+    """
+    if _is_frontier_tier(model_pricing, ranked_pool):
+        seed = max(1, int(round(FRONTIER_PRIOR_SEED_FRAC * n_ranked)))
+        return _build_prior(n_ranked, seed, sigma_frac=FRONTIER_PRIOR_SIGMA_FRAC)
+    seed = _pricing_seed_rank(model_pricing, ranked_pool)
+    return _build_prior(n_ranked, seed, sigma_frac=PRICING_PRIOR_SIGMA_FRAC)
 
 
 # =============================================================================
@@ -267,11 +328,10 @@ def init_placement_state(
     model_pricing: Optional[Tuple[float, float]] = None,
     ranked_pool: Optional[List[Dict[str, Any]]] = None,
 ) -> PlacementState:
-    """Initialize state with a (optionally pricing-seeded) prior."""
+    """Initialize state with a pricing-aware prior (frontier or cohort)."""
     if ranked_pool is None:
         ranked_pool = get_ranked_pool()
-    seed = _pricing_seed_rank(model_pricing, ranked_pool)
-    prior = _build_prior(len(ranked_pool), seed)
+    prior = _build_pricing_prior(len(ranked_pool), model_pricing, ranked_pool)
     return PlacementState(
         model_id=model_id,
         posterior=prior,
@@ -298,7 +358,7 @@ def select_next_opponent_with_reason(
         "entropy_bits": state.entropy_bits,
     }
 
-    if state.games_played >= state.max_games:
+    if state.games_played >= effective_max_games(state):
         debug["reason"] = "budget_exhausted"
         return None, debug
 
@@ -436,15 +496,37 @@ def get_opponent_rank_index(
 
 def format_state_summary(state: PlacementState) -> str:
     lo, hi = state.credible_interval_90
+    eff = effective_max_games(state)
+    budget = f"{state.games_played}/{eff}"
+    if eff != state.max_games:
+        budget += f" [extended from {state.max_games}]"
     return (
         f"posterior: median_rank={state.median_rank} (90% CI [{lo}, {hi}]) "
-        f"H={state.entropy_bits:.2f}b | games {state.games_played}/{state.max_games}"
+        f"H={state.entropy_bits:.2f}b | games {budget}"
     )
 
 
+def effective_max_games(state: PlacementState) -> int:
+    """
+    Adaptive game budget.
+
+    Returns max_games + EXTENDED_BUDGET_MAX_EXTRA_GAMES if the model looks
+    like a top-of-ladder contender (median rank ≤ EXTENDED_BUDGET_RANK_THRESHOLD)
+    AND the posterior is still uncertain (entropy ≥ EXTENDED_BUDGET_ENTROPY_THRESHOLD).
+    Otherwise returns max_games unchanged. Decided per call from current state,
+    so the extension only kicks in once the model has climbed.
+    """
+    if (
+        state.median_rank <= EXTENDED_BUDGET_RANK_THRESHOLD
+        and state.entropy_bits >= EXTENDED_BUDGET_ENTROPY_THRESHOLD
+    ):
+        return state.max_games + EXTENDED_BUDGET_MAX_EXTRA_GAMES
+    return state.max_games
+
+
 def should_finalize(state: PlacementState) -> bool:
-    """True if budget exhausted OR posterior is sharp enough."""
-    if state.games_played >= state.max_games:
+    """True if effective budget exhausted OR posterior is sharp enough."""
+    if state.games_played >= effective_max_games(state):
         return True
     if state.entropy_bits <= EARLY_STOP_ENTROPY_BITS:
         return True

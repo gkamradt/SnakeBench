@@ -14,12 +14,18 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from placement_system import (
-    NOISE_BETA,
+    EXTENDED_BUDGET_MAX_EXTRA_GAMES,
+    EXTENDED_BUDGET_RANK_THRESHOLD,
+    FRONTIER_PRIOR_SEED_FRAC,
     MAX_REPEATS_PER_OPPONENT,
+    NOISE_BETA,
     PlacementState,
     _build_prior,
+    _build_pricing_prior,
+    _is_frontier_tier,
     _likelihood,
     _pricing_seed_rank,
+    effective_max_games,
     init_placement_state,
     rebuild_state_from_history,
     select_next_opponent_with_reason,
@@ -278,13 +284,106 @@ def test_should_finalize_respects_budget_and_entropy():
     state = init_placement_state(model_id=-1, max_games=10, ranked_pool=pool)
     assert not should_finalize(state)
 
-    # Budget exhausted
-    state.games_played = 10
-    assert should_finalize(state)
-
-    # Sharp posterior also finalizes
+    # Sharp posterior finalizes early regardless of budget
     state.games_played = 3
     sharp = np.zeros(100)
     sharp[42] = 1.0
     state.posterior = sharp
+    assert should_finalize(state)
+
+
+# -----------------------------------------------------------------------------
+# Frontier-tier prior
+# -----------------------------------------------------------------------------
+
+def _pool_with_pricing(n: int):
+    """Pool where cost is inversely correlated with rank (top models cost most)."""
+    pool = make_pool(n)
+    for m in pool:
+        # Top rank → expensive ($30 total), bottom rank → cheap ($0.10)
+        frac = 1.0 - (m["rank_index"] / max(1, n - 1))
+        cost = 0.1 + frac * 29.9
+        m["pricing_input"] = cost * 0.2
+        m["pricing_output"] = cost * 0.8
+    return pool
+
+
+def test_is_frontier_tier_detects_top_decile():
+    pool = _pool_with_pricing(100)
+    # An expensive model (matches top of pool)
+    assert _is_frontier_tier((6.0, 24.0), pool) is True
+    # A cheap model
+    assert _is_frontier_tier((0.05, 0.15), pool) is False
+    # No pricing info ⇒ not frontier
+    assert _is_frontier_tier(None, pool) is False
+
+
+def test_frontier_prior_seeds_near_top():
+    pool = _pool_with_pricing(100)
+    # Frontier-tier pricing ⇒ seed at ~5% of N
+    prior = _build_pricing_prior(100, (6.0, 24.0), pool)
+    expected_seed = max(1, int(round(FRONTIER_PRIOR_SEED_FRAC * 100)))  # 5
+    assert int(np.argmax(prior)) == expected_seed
+    # And the prior should be tighter (narrow Gaussian) — most mass in top ~30
+    assert prior[:30].sum() > 0.85
+
+
+def test_non_frontier_uses_cohort_prior():
+    pool = _pool_with_pricing(100)
+    # Mid-tier pricing ⇒ cohort prior, NOT frontier override
+    prior = _build_pricing_prior(100, (1.0, 3.0), pool)
+    peak = int(np.argmax(prior))
+    # Should peak somewhere in the mid-pool (not near rank 5)
+    assert 20 < peak < 90
+
+
+# -----------------------------------------------------------------------------
+# Adaptive budget
+# -----------------------------------------------------------------------------
+
+def test_effective_max_games_extends_at_top_when_uncertain():
+    pool = make_pool(100)
+    state = init_placement_state(model_id=-1, max_games=10, ranked_pool=pool)
+    # Force median rank into the top group while keeping posterior unsharp
+    top_concentrated = np.zeros(100)
+    top_concentrated[:30] = 1.0 / 30  # uniform over top 30 ⇒ median=14? we want ≤10
+    # Build a posterior with median in top 10 but still high entropy
+    p = np.zeros(100)
+    p[:21] = 1.0 / 21
+    state.posterior = p
+    assert state.median_rank <= EXTENDED_BUDGET_RANK_THRESHOLD
+    assert state.entropy_bits > 2.5
+    assert effective_max_games(state) == 10 + EXTENDED_BUDGET_MAX_EXTRA_GAMES
+
+
+def test_effective_max_games_no_extension_for_midpack():
+    pool = make_pool(100)
+    state = init_placement_state(model_id=-1, max_games=10, ranked_pool=pool)
+    p = np.zeros(100)
+    p[40:80] = 1.0 / 40  # median rank ≈ 59, NOT top-of-ladder
+    state.posterior = p
+    assert effective_max_games(state) == 10
+
+
+def test_effective_max_games_no_extension_when_sharp():
+    pool = make_pool(100)
+    state = init_placement_state(model_id=-1, max_games=10, ranked_pool=pool)
+    p = np.zeros(100)
+    p[3] = 1.0  # very sharp; entropy = 0
+    state.posterior = p
+    # Median is in top 10 but posterior is already sharp ⇒ no extension
+    assert effective_max_games(state) == 10
+
+
+def test_should_finalize_uses_extended_budget_at_top():
+    pool = make_pool(100)
+    state = init_placement_state(model_id=-1, max_games=10, ranked_pool=pool)
+    # Top-of-ladder, still uncertain
+    p = np.zeros(100)
+    p[:21] = 1.0 / 21
+    state.posterior = p
+    state.games_played = 10
+    # Should NOT finalize at game 10 — extension kicked in
+    assert not should_finalize(state)
+    state.games_played = 13
     assert should_finalize(state)
