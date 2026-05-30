@@ -60,6 +60,20 @@ interface GameViewerProps {
   gameId: string;
   colorConfig?: ColorConfig; // Optional custom color config
   liveMode?: boolean;
+  captureMode?: boolean; // Headless capture mode for video generation
+}
+
+// Window hook exposed in capture mode so a headless browser (Playwright)
+// can deterministically drive frames during video generation.
+declare global {
+  interface Window {
+    __capture?: {
+      ready: boolean
+      totalFrames: number
+      currentFrame: number
+      setFrame: (n: number) => void
+    }
+  }
 }
 
 // Default color configuration
@@ -85,14 +99,34 @@ export default function GameViewer({
   modelNames,
   gameId,
   colorConfig = defaultColorConfig,
-  liveMode = false
+  liveMode = false,
+  captureMode = false
 }: GameViewerProps) {
   const [currentRound, setCurrentRound] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(true);
+  // In capture mode we never autoplay; a headless driver controls the frame.
+  const [isPlaying, setIsPlaying] = useState(!captureMode);
   const [wasAutoStopped, setWasAutoStopped] = useState(false);
   const [thoughtTiming, setThoughtTiming] = useState<"current" | "next">("next");
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const prevTotalRoundsRef = useRef(frames.length);
+
+  // Expose a deterministic frame-control hook for Playwright capture.
+  useEffect(() => {
+    if (!captureMode) return;
+    if (typeof window === "undefined") return;
+    window.__capture = {
+      ready: true,
+      totalFrames: frames.length,
+      currentFrame: currentRound,
+      setFrame: (n: number) => {
+        const clamped = Math.max(0, Math.min(frames.length - 1, Math.floor(n)));
+        setCurrentRound(clamped);
+      },
+    };
+    return () => {
+      try { delete window.__capture; } catch { /* noop */ }
+    };
+  }, [captureMode, frames.length, currentRound]);
   
   const totalRounds = frames.length;
   const currentRoundData = frames[currentRound] || frames[frames.length - 1];
@@ -124,6 +158,7 @@ export default function GameViewer({
 
   // Auto-play functionality
   useEffect(() => {
+    if (captureMode) return;
     if (!isPlaying) return;
     if (!totalRounds) return;
     
@@ -382,7 +417,8 @@ export default function GameViewer({
         />
       </div>
 
-      {/* Game controls - integrated */}
+      {/* Game controls - integrated (hidden in capture mode) */}
+      {!captureMode && (
       <div className="mt-4 bg-white border border-gray-200 rounded-lg p-3 shadow-sm">
         <GameControls
           currentRound={currentRound}
@@ -450,8 +486,10 @@ export default function GameViewer({
           </div>
         </div>
       </div>
+      )}
 
-      {/* Game ID + download - compact footer */}
+      {/* Game ID + download - compact footer (hidden in capture mode) */}
+      {!captureMode && (
       <div className="mt-4 flex flex-wrap items-center justify-center gap-3 text-[10px] font-mono text-gray-400">
         <button
           onClick={copyGameId}
@@ -467,6 +505,7 @@ export default function GameViewer({
           </>
         )}
       </div>
+      )}
     </>
   )
 } 

@@ -98,6 +98,8 @@ function normalizeReplay(raw: unknown): ReplayPayload {
 
 export default async function MatchPage(props: PageProps) {
   const params = await props.params
+  const search = await props.searchParams
+  const captureMode = search?.capture === '1' || search?.capture === 'true'
   const { id } = params
 
   // Fetch replay directly from Supabase Storage
@@ -132,6 +134,34 @@ export default async function MatchPage(props: PageProps) {
 
   const modelIds = Object.keys(replay.players || {})
   const modelNames = modelIds.map(id => replay.players[id]?.name || `Player ${id}`)
+
+  if (captureMode) {
+    // Stripped-down layout for headless video capture: no nav, no footer,
+    // no MatchInfo. Driven via window.__capture from Playwright.
+    return (
+      <>
+        {/* Hide global chrome from RootLayout so the capture viewport
+            contains only the gameplay UI. */}
+        <style>{`
+          nav, footer { display: none !important; }
+          body { background: #f9fafb !important; }
+          main { padding: 0 !important; margin: 0 !important; }
+        `}</style>
+        <div data-capture-root className="bg-gray-50">
+          <div className="max-w-7xl mx-auto p-6">
+            <GameViewer
+              frames={replay.frames}
+              board={replay.game.board}
+              modelIds={modelIds}
+              modelNames={modelNames}
+              gameId={replay.game.id}
+              captureMode
+            />
+          </div>
+        </div>
+      </>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">

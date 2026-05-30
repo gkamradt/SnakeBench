@@ -114,20 +114,47 @@ def generate_video_task(self, game_id: str) -> Dict[str, str]:
     """
     Generate and upload a replay video for the given game.
 
+    Uses Playwright to record the live frontend's `/match/<id>?capture=1`
+    page so the video matches the in-browser look exactly.
+
     Args:
         game_id: ID of the game whose replay should be rendered
 
     Returns:
         Dict with storage_path/public_url for the video
     """
+    import os
+    import time
+
     logger.info(f"Starting video generation for game {game_id}")
     try:
-        # Lazy import to keep main workers light until needed
+        # Lazy imports keep base workers (non-video queue) light
+        from cli.generate_video_playwright import generate_video_via_playwright
         from services.video_generator import SnakeVideoGenerator
-        generator = SnakeVideoGenerator()
-        result = generator.generate_and_upload(game_id)
-        logger.info(f"Video generated and uploaded for game {game_id}: {result.get('public_url')}")
-        return result
+
+        base_url = (
+            os.getenv("CAPTURE_BASE_URL")
+            or os.getenv("NEXT_PUBLIC_FRONTEND_URL")
+            or "https://snakebench.com"
+        ).rstrip("/")
+
+        # The frontend reads replay.json from Supabase Storage at request time;
+        # Supabase's CDN can lag a few seconds behind a fresh upload.
+        time.sleep(2)
+
+        video_path = generate_video_via_playwright(
+            game_id=game_id,
+            base_url=base_url,
+        )
+
+        try:
+            uploader = SnakeVideoGenerator()
+            result = uploader._upload_video_to_supabase(game_id, video_path)
+            logger.info(f"Video generated and uploaded for game {game_id}: {result.get('public_url')}")
+            return result
+        finally:
+            if os.path.exists(video_path):
+                os.remove(video_path)
     except Exception as e:
         logger.error(f"Video generation failed for game {game_id}: {e}", exc_info=True)
         raise
