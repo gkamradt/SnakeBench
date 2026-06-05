@@ -210,8 +210,8 @@ def main() -> None:
     parser.add_argument(
         "--crop-sides",
         type=float,
-        default=0.15,
-        help="Fraction to crop off LEFT and RIGHT (default: 0.15, i.e. keep middle 70%%)",
+        default=0.16,
+        help="Fraction to crop off LEFT and RIGHT (default: 0.16, i.e. keep middle 68%%)",
     )
     parser.add_argument("--width", type=int, default=1920, help="Viewport width (default: 1920)")
     parser.add_argument("--height", type=int, default=1080, help="Viewport height (default: 1080)")
