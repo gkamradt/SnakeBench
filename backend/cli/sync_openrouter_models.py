@@ -138,8 +138,23 @@ def upsert_model(model_data: Dict[str, Any]) -> Tuple[Optional[int], bool]:
         print(f"  ⊘ Skipped: Auto Router (excluded from sync)")
         return None, False
 
+    # Only auto-activate new models from these providers (OpenRouter slug
+    # prefixes). All other providers are paused: they still get synced/upserted
+    # but stay inactive until manually enabled.
+    AUTO_ACTIVATE_PROVIDERS = {
+        'openai',      # OpenAI
+        'anthropic',   # Anthropic
+        'google',      # Google
+        'meta-llama',  # Meta
+        'x-ai',        # xAI
+    }
+
     def qualifies_for_auto_activation(data: Dict[str, Any]) -> bool:
         """Decide if a brand-new model should start as active."""
+        provider = (data.get('provider') or '').lower()
+        if provider not in AUTO_ACTIVATE_PROVIDERS:
+            return False
+
         max_tokens = data.get('max_completion_tokens')
         price_in = data.get('pricing_input')
 
