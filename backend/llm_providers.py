@@ -4,6 +4,24 @@ from json.decoder import JSONDecodeError
 from openai import OpenAI
 from typing import Dict, Any, Optional
 
+
+def _sanitize_env_value(value: Optional[str]) -> Optional[str]:
+    """
+    Clean up env-provided strings that may include surrounding quotes or whitespace.
+
+    Some shells/export flows set values like OPENROUTER_API_KEY="sk-or-...".
+    The OpenAI SDK forwards the raw string, so we strip wrapping quotes here
+    to avoid 401s that look like "No cookie auth credentials found".
+    """
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if len(cleaned) >= 2 and (
+        (cleaned[0] == '"' and cleaned[-1] == '"') or (cleaned[0] == "'" and cleaned[-1] == "'")
+    ):
+        cleaned = cleaned[1:-1].strip()
+    return cleaned
+
 class LLMProviderInterface:
     """
     A common interface for LLM calls.
@@ -51,8 +69,9 @@ class LLMProviderInterface:
 
 class OpenRouterProvider(LLMProviderInterface):
     def __init__(self, api_key: str, config: Dict[str, Any]):
-        base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        raw_base_url = os.getenv("OPENROUTER_BASE_URL")
+        base_url = _sanitize_env_value(raw_base_url) or "https://openrouter.ai/api/v1"
+        self.client = OpenAI(api_key=_sanitize_env_value(api_key) or api_key, base_url=base_url)
         self.model_name = config['model_name']
         self.api_type = config.get('api_type', 'completions')
         self.api_kwargs = self.extract_api_kwargs(config)
@@ -73,6 +92,19 @@ class OpenRouterProvider(LLMProviderInterface):
         request_kwargs = dict(self.api_kwargs)
         if self.extra_headers:
             request_kwargs['extra_headers'] = self.extra_headers
+
+        # Add middle-out transform for automatic context compression (OpenRouter feature)
+        # OpenRouter expects transforms inside extra_body, not as a top-level kwarg.
+        extra_body = request_kwargs.pop("extra_body", {}) or {}
+        transforms = request_kwargs.pop("transforms", None)
+        if not transforms:
+            transforms = ["middle-out"]
+        if isinstance(extra_body, dict):
+            extra_body = dict(extra_body)
+            extra_body["transforms"] = transforms
+        else:
+            extra_body = {"transforms": transforms}
+        request_kwargs["extra_body"] = extra_body
 
         if self.api_type == 'responses':
             response = self.client.responses.create(
@@ -184,7 +216,8 @@ def create_llm_provider(player_config: Dict[str, Any]) -> LLMProviderInterface:
     Factory function for creating an LLM provider instance.
     All models now route through OpenRouter.
     """
-    if not os.getenv("OPENROUTER_API_KEY"):
+    openrouter_api_key = _sanitize_env_value(os.getenv("OPENROUTER_API_KEY"))
+    if not openrouter_api_key:
         raise ValueError("OPENROUTER_API_KEY is not set in the environment variables.")
 
-    return OpenRouterProvider(api_key=os.getenv("OPENROUTER_API_KEY"), config=player_config)
+    return OpenRouterProvider(api_key=openrouter_api_key, config=player_config)

@@ -150,6 +150,7 @@ class LLMPlayer(Player):
             f"The board size is {game_state.width}x{game_state.height}. Normal X,Y coordinates are used. "
             f"Coordinates range from (0,0) at bottom left to ({game_state.width-1},{game_state.height-1}) at top right. "
             "All snake coordinate lists are ordered head-to-tail: the first tuple is the head, each subsequent tuple connects to the previous one, and the last tuple is the tail.\n"
+            "IMPORTANT: Do not perform web searches or access external information. Use only the game state provided.\n"
             f"{turn_line}\n\n"
             f"Apples at: {apples_str}\n\n"
             f"Scores so far:\n"
