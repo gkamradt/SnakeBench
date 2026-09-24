@@ -212,6 +212,8 @@ class SnakeGame:
                     "output_tokens": move_data.get("output_tokens", 0),
                     "cost": move_data.get("cost", 0.0)
                 }
+                if move_data.get("usage_details"):
+                    round_moves[snake_id]["usage_details"] = move_data["usage_details"]
                 print(f"Player {snake_id} ({player_name}) chose move: {move_data['direction']} (cost: ${move_data.get('cost', 0.0):.6f})")
 
         return round_moves

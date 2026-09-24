@@ -1,8 +1,10 @@
 import os
 import json
+import uuid
 from json.decoder import JSONDecodeError
 from openai import OpenAI
 from typing import Dict, Any, Optional
+from prompting import SnakePrompt, prompt_request, usage_details
 
 class LLMProviderInterface:
     """
@@ -56,6 +58,9 @@ class OpenRouterProvider(LLMProviderInterface):
         self.model_name = config['model_name']
         self.api_type = config.get('api_type', 'completions')
         self.api_kwargs = self.extract_api_kwargs(config)
+        # One provider instance lives for one player/game. Changing turn text
+        # must not change OpenRouter's conversation routing key.
+        self.session_id = uuid.uuid4().hex
 
         explicit_headers = self.api_kwargs.pop('extra_headers', None)
         env_headers = {}
@@ -74,10 +79,17 @@ class OpenRouterProvider(LLMProviderInterface):
         if self.extra_headers:
             request_kwargs['extra_headers'] = self.extra_headers
 
+        payload = prompt_request(prompt, api=self.api_type, model=self.model_name)
+        cache_body = payload.pop('extra_body', {})
+        if isinstance(prompt, SnakePrompt):
+            cache_body['session_id'] = self.session_id
+        if cache_body:
+            request_kwargs['extra_body'] = {**cache_body, **request_kwargs.get('extra_body', {})}
+        request_kwargs.update(payload)
+
         if self.api_type == 'responses':
             response = self.client.responses.create(
                 model=self.model_name,
-                input=prompt,
                 **request_kwargs,
             )
             if isinstance(response, str):
@@ -93,33 +105,32 @@ class OpenRouterProvider(LLMProviderInterface):
             if not output:
                 raise ValueError(f"OpenRouter response missing output field: {response}")
 
-            message = output[0]
-            content = getattr(message, "content", None)
-            if content is None and isinstance(message, dict):
-                content = message.get("content")
-            if not content:
-                raise ValueError(f"OpenRouter response missing content block: {message}")
-
-            block = content[0]
-            text = getattr(block, "text", None)
-            if text is None and isinstance(block, dict):
-                text = block.get("text", "")
+            # Reasoning items can precede the assistant message.
+            texts = []
+            for message in output:
+                content = message.get('content', []) if isinstance(message, dict) else getattr(message, 'content', [])
+                for block in content or []:
+                    block_text = block.get('text') if isinstance(block, dict) else getattr(block, 'text', None)
+                    if block_text:
+                        texts.append(block_text)
+            text = '\n'.join(texts)
+            if not text:
+                raise ValueError("OpenRouter response missing output text")
 
             # Extract usage information
             usage = getattr(response, "usage", None)
             if usage is None and isinstance(response, dict):
                 usage = response.get("usage", {})
 
-            return {
+            result = {
                 "text": str(text or "").strip(),
-                "input_tokens": getattr(usage, "input_tokens", 0) if usage else 0,
-                "output_tokens": getattr(usage, "output_tokens", 0) if usage else 0
+                "input_tokens": usage.get("input_tokens", 0) if isinstance(usage, dict) else getattr(usage, "input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0) if isinstance(usage, dict) else getattr(usage, "output_tokens", 0)
             }
         else:
             try:
                 response = self.client.chat.completions.create(
                     model=self.model_name,
-                    messages=[{"role": "user", "content": prompt}],
                     **request_kwargs,
                 )
             except JSONDecodeError as exc:
@@ -131,11 +142,16 @@ class OpenRouterProvider(LLMProviderInterface):
             # Extract usage information
             usage = response.usage if hasattr(response, 'usage') else None
 
-            return {
+            result = {
                 "text": response.choices[0].message.content.strip(),
                 "input_tokens": usage.prompt_tokens if usage else 0,
                 "output_tokens": usage.completion_tokens if usage else 0
             }
+
+        details = usage_details(usage, api=self.api_type)
+        if details:
+            result["usage_details"] = details
+        return result
 
     def health_check(self) -> bool:
         """

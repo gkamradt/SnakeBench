@@ -9,6 +9,7 @@ from domain.constants import UP, DOWN, LEFT, RIGHT, VALID_MOVES, APPLE_TARGET
 from domain.game_state import GameState
 from llm_providers import create_llm_provider
 from .base import Player
+from prompting import SnakePrompt
 
 
 class LLMPlayer(Player):
@@ -92,6 +93,9 @@ class LLMPlayer(Player):
 
         # Calculate cost (price is per million tokens)
         cost = (input_tokens * input_price_per_m / 1_000_000) + (output_tokens * output_price_per_m / 1_000_000)
+        details = response_data.get("usage_details", {})
+        if details.get("provider_cost") is not None:
+            cost = details["provider_cost"]
 
         move_data = {
             "direction": direction,
@@ -101,6 +105,8 @@ class LLMPlayer(Player):
             "cost": cost
         }
 
+        if details:
+            move_data["usage_details"] = details
         self.move_history.append({self.snake_id: move_data})
         return move_data
 
@@ -145,11 +151,59 @@ class LLMPlayer(Player):
         )
         enemy_positions_str = "\n".join(enemy_positions) if enemy_positions else "  - none"
 
-        prompt = (
+        instructions = (
             f"You are controlling a snake in a multi-apple Snake game. "
             f"The board size is {game_state.width}x{game_state.height}. Normal X,Y coordinates are used. "
             f"Coordinates range from (0,0) at bottom left to ({game_state.width-1},{game_state.height-1}) at top right. "
             "All snake coordinate lists are ordered head-to-tail: the first tuple is the head, each subsequent tuple connects to the previous one, and the last tuple is the tail.\n"
+            '\n'
+            'Reading the board:\n'
+            '- Each snake cell shows its snake ID followed by H, B, or T.\n'
+            '- 0H / 1H = the head of snake 0 / snake 1.\n'
+            '- 0B / 1B = an intermediate body segment of snake 0 / snake 1.\n'
+            '- 0T / 1T = the tail of snake 0 / snake 1.\n'
+            '- A = an apple. A dot (.) = an empty cell.\n'
+            '- The column labels are x coordinates; the row labels are y coordinates.\n'
+            '- A one-segment snake is shown as H: its head is also its tail.\n'
+            '- Your snake ID is specified in the turn state. If you control snake 1, all 1H, 1B, and 1T cells belong to you; snake 0 is your opponent. H/B/T labels describe the current board, not predicted next positions.\n'
+            '- You choose the head\'s move; you do not choose separate moves for individual body segments.\n'
+            '- The Body coordinate list excludes the head and includes the tail. Its final coordinate is the tail. Use the ordered coordinates to trace the snake; the grid is a spatial aid.\n'
+            '\n'
+            'Tail movement:\n'
+            '- When a snake moves without eating an apple, its old tail cell is removed from its body. For a snake with at least two segments, the preceding coordinate becomes the new tail.\n'
+            '- When a snake eats an apple, it grows and its old tail stays in place that turn.\n'
+            '- Body collisions are checked using the proposed bodies after this movement. An old tail cell that vacates is not a body obstacle that turn; other collisions can still make entering it fatal.\n'
+            "- An opponent's move is unknown when you choose yours. Do not assume its tail will vacate if it could eat an apple.\n"
+            '\n'
+            "Rules and win conditions:\n"
+            "- All snakes move simultaneously each turn.\n"
+            "- Each turn, you choose one move: UP, DOWN, LEFT, or RIGHT. Every snake's head moves one cell in its chosen direction at the same time.\n"
+            "- If you move onto an apple, you grow by 1 segment and gain 1 point (1 apple).\n"
+            "- If you move outside the board (beyond the listed coordinate ranges), you die.\n"
+            "- If your head moves into a cell occupied by a body at the body-collision check (including your own), you die.\n"
+            "- Moving directly backwards into your own body kills you if that cell remains occupied after tail movement.\n"
+            "- If another snake's head moves into any part of your body, that snake dies and your body remains.\n"
+            "- If two snake heads move into the same cell on the same turn, both snakes die (head-on collision).\n"
+            "- If all snakes die on the same turn for any reason, the game ends immediately and the snake with more apples at that moment wins; if apples are tied, the game is a draw.\n"
+            f"- The game ends immediately when any snake reaches {APPLE_TARGET} apples. If multiple snakes reach {APPLE_TARGET} or more on the same turn, the snake with the higher apple count wins that round; if tied, it is a draw.\n"
+            f"{max_turns_rule}"
+            "- If at any point all opponents are dead and you are alive, you immediately win.\n"
+            "- If multiple snakes are still alive at the final turn, the snake with the most apples wins. If apples are tied at the end of the game, the game is a draw.\n\n"
+            "Objective and strategy:\n"
+            "- Prioritize staying alive; avoid moves that obviously kill you.\n"
+            "- Among the moves that keep you alive, prefer moves that both:\n"
+            "  * increase your chance of safely eating apples, and\n"
+            "  * keep future options open (avoid getting trapped in tight spaces or dead-ends).\n\n"
+            "Decision process for each move:\n"
+            "1) Consider all four directions: UP, DOWN, LEFT, RIGHT.\n"
+            "2) Eliminate any move that would immediately kill you (off the board or into an occupied body cell), accounting for tail movement.\n"
+            "3) Among remaining safe moves, favor moves that keep multiple safe follow-up moves available and move you closer to reachable apples while avoiding likely head-on collisions (remember enemy heads will also move this turn).\n\n"
+            "You may think out loud and explain your reasoning.\n"
+            "You may also write a short long-term plan or strategy note to your future self for the next few turns. This plan will be shown back to you as your last rationale on the next turn. Any such plan must appear before your final move line.\n"
+            "Coordinate reminder: decreasing your x coordinate is to the left, increasing your x coordinate is to the right. Decreasing your y coordinate is down, increasing your y coordinate is up.\n"
+            "The final non-empty line of your response must be exactly one word: UP, DOWN, LEFT, or RIGHT. Do not add anything after that word, and do not mention future directions after it.\n\n"
+        )
+        turn_state = (
             f"{turn_line}\n\n"
             f"Apples at: {apples_str}\n\n"
             f"Scores so far:\n"
@@ -176,32 +230,5 @@ class LLMPlayer(Player):
             f"{last_rationale}\n"
             f"**END LAST RATIONALE**\n\n"
             f"--End of your last move information.--\n\n"
-            "Rules and win conditions:\n"
-            "- All snakes move simultaneously each turn.\n"
-            "- Each turn, you choose one move: UP, DOWN, LEFT, or RIGHT. Every snake's head moves one cell in its chosen direction at the same time.\n"
-            "- If you move onto an apple, you grow by 1 segment and gain 1 point (1 apple).\n"
-            "- If you move outside the board (beyond the listed coordinate ranges), you die.\n"
-            "- If your head moves into any snake's body (including your own), you die.\n"
-            "- Moving directly backwards into your own body (into the cell directly behind your head) counts as hitting yourself and you die.\n"
-            "- If another snake's head moves into any part of your body, that snake dies and your body remains.\n"
-            "- If two snake heads move into the same cell on the same turn, both snakes die (head-on collision).\n"
-            "- If all snakes die on the same turn for any reason, the game ends immediately and the snake with more apples at that moment wins; if apples are tied, the game is a draw.\n"
-            f"- The game ends immediately when any snake reaches {APPLE_TARGET} apples. If multiple snakes reach {APPLE_TARGET} or more on the same turn, the snake with the higher apple count wins that round; if tied, it is a draw.\n"
-            f"{max_turns_rule}"
-            "- If at any point all opponents are dead and you are alive, you immediately win.\n"
-            "- If multiple snakes are still alive at the final turn, the snake with the most apples wins. If apples are tied at the end of the game, the game is a draw.\n\n"
-            "Objective and strategy:\n"
-            "- You cannot win if you are dead, so never choose a move that obviously kills you.\n"
-            "- Among the moves that keep you alive, prefer moves that both:\n"
-            "  * increase your chance of safely eating apples, and\n"
-            "  * keep future options open (avoid getting trapped in tight spaces or dead-ends).\n\n"
-            "Decision process for each move:\n"
-            "1) Consider all four directions: UP, DOWN, LEFT, RIGHT.\n"
-            "2) Eliminate any move that would immediately kill you (off the board, into your own body including backwards, or into another snake's body).\n"
-            "3) Among remaining safe moves, favor moves that keep multiple safe follow-up moves available and move you closer to reachable apples while avoiding likely head-on collisions (remember enemy heads will also move this turn).\n\n"
-            "You may think out loud and explain your reasoning.\n"
-            "You may also write a short long-term plan or strategy note to your future self for the next few turns. This plan will be shown back to you as your last rationale on the next turn. Any such plan must appear before your final move line.\n"
-            "Coordinate reminder: decreasing your x coordinate is to the left, increasing your x coordinate is to the right. Decreasing your y coordinate is down, increasing your y coordinate is up.\n"
-            "The final non-empty line of your response must be exactly one word: UP, DOWN, LEFT, or RIGHT. Do not add anything after that word, and do not mention future directions after it.\n\n"
         )
-        return prompt
+        return SnakePrompt(instructions, turn_state)

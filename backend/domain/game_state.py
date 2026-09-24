@@ -47,9 +47,9 @@ class GameState:
         Returns a string representation of the board with:
         . = empty space
         A = apple
-        T = snake tail
-        0,1,2... = snake head (showing player number)
-        Now with (0,0) at bottom left and x-axis labels at bottom
+        <snake ID>H/B/T = head/intermediate body/tail
+        A one-cell snake uses H. Coordinate lists preserve segment order.
+        Coordinates start at (0,0) at bottom left; x-axis labels appear above.
         """
         # Create empty board
         board = [['.' for _ in range(self.width)] for _ in range(self.height)]
@@ -59,25 +59,22 @@ class GameState:
             board[ay][ax] = 'A'
 
         # Place snakes
-        for i, (snake_id, positions) in enumerate(self.snake_positions.items(), start=0):
+        for snake_id, positions in self.snake_positions.items():
             if not self.alive[snake_id]:
                 continue
 
             # Place snake body
             for pos_idx, (x, y) in enumerate(positions):
-                if pos_idx == 0:  # Head
-                    board[y][x] = str(i)  # Use snake number (0, 1, 2...) for head
-                else:  # Body/tail
-                    board[y][x] = 'T'
+                part = 'H' if pos_idx == 0 else 'T' if pos_idx == len(positions) - 1 else 'B'
+                board[y][x] = f"{snake_id}{part}"
 
         # Build the string representation
-        result = []
-        # Print rows in reverse order (bottom to top)
+        cell_width = max(2, len(str(self.width - 1)), *(len(cell) for row in board for cell in row))
+        row_width = max(3, len(str(self.height - 1)))
+        result = [f"{'y/x':>{row_width}} " + " ".join(f"{x:>{cell_width}}" for x in range(self.width))]
+        # Display highest y first so the origin appears at bottom left.
         for y in range(self.height - 1, -1, -1):
-            result.append(f"{y:2d} {' '.join(board[y])}")
-
-        # Add x-axis labels at the bottom
-        result.append("   " + " ".join(str(i) for i in range(self.width)))
+            result.append(f"{y:>{row_width}} " + " ".join(f"{cell:>{cell_width}}" for cell in board[y]))
 
         return "\n".join(result)
 
