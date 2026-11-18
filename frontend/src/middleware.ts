@@ -1,7 +1,15 @@
-import { type NextRequest } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
 
 export async function middleware(request: NextRequest) {
+  // Public pages can run locally without configuring the optional admin login.
+  if (
+    process.env.NODE_ENV === "development" &&
+    !process.env.NEXT_PUBLIC_SUPABASE_URL &&
+    !request.nextUrl.pathname.startsWith("/admin")
+  ) {
+    return NextResponse.next();
+  }
   return await updateSession(request);
 }
 

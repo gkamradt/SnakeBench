@@ -19,7 +19,7 @@ export default function Navbar() {
                 <span>SnakeBench</span>
               </Link>
             </div>
-            <div className="hidden sm:ml-6 sm:flex sm:space-x-8">
+            <div className="hidden md:ml-6 md:flex md:space-x-5 lg:space-x-8">
               <Link
                 href="/live-games"
                 className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-mono"
@@ -31,6 +31,12 @@ export default function Navbar() {
                 className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-mono"
               >
                 Latest Games
+              </Link>
+              <Link
+                href="/play-ai"
+                className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-mono"
+              >
+                Play AI
               </Link>
               <Link
                 href={topMatchHref}
@@ -46,11 +52,11 @@ export default function Navbar() {
               </Link>
             </div>
           </div>
-          <div className="flex items-center sm:hidden">
+          <div className="flex items-center md:hidden">
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="inline-flex items-center justify-center p-2 rounded-md text-gray-400 hover:text-gray-500 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-gray-500"
-              aria-expanded="false"
+              aria-expanded={mobileMenuOpen}
             >
               <span className="sr-only">Open main menu</span>
               {mobileMenuOpen ? (
@@ -69,7 +75,7 @@ export default function Navbar() {
 
       {/* Mobile menu */}
       {mobileMenuOpen && (
-        <div className="sm:hidden">
+        <div className="md:hidden">
           <div className="pt-2 pb-3 space-y-1">
             <Link
               href="/live-games"
@@ -84,6 +90,13 @@ export default function Navbar() {
               onClick={() => setMobileMenuOpen(false)}
             >
               Latest Games
+            </Link>
+            <Link
+              href="/play-ai"
+              className="border-transparent text-gray-500 hover:bg-gray-50 hover:border-gray-300 hover:text-gray-700 block pl-3 pr-4 py-2 border-l-4 text-base font-mono"
+              onClick={() => setMobileMenuOpen(false)}
+            >
+              Play AI
             </Link>
             <Link
               href={topMatchHref}

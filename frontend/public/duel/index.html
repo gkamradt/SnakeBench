@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>You vs Jev · SnakeBench</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>You vs Jev</h1>
+        <span id="status" class="status" role="status">Connecting</span>
+      </header>
+      <section class="scoreboard card" aria-label="Scores">
+        <div class="player">
+          <div class="name"><i></i>You</div>
+          <strong id="you">0</strong> <small>apples</small>
+        </div>
+        <div class="balance">
+          <small>VS</small>
+          <div class="bars">
+            <span><b id="left-bar"></b></span>
+            <hr />
+            <span><b id="right-bar"></b></span>
+          </div>
+        </div>
+        <div class="player away">
+          <div class="name">Jev<i></i></div>
+          <small>apples</small> <strong id="jev">0</strong>
+        </div>
+      </section>
+      <section class="court card" aria-label="Game arena">
+        <div class="surface">
+          <canvas
+            id="board"
+            width="960"
+            height="720"
+            role="img"
+            aria-label="Snake board. You are green and Jev is blue. Steer with the keyboard or swipe."
+          ></canvas>
+          <div
+            id="speeds"
+            class="speeds overlay"
+            role="group"
+            aria-label="Choose a speed to play"
+            hidden
+          >
+            <button>Easy</button>
+            <button class="primary">Medium</button>
+            <button>Hard</button>
+            <button>Extreme</button>
+          </div>
+          <button id="play" class="primary overlay" disabled>Loading…</button>
+        </div>
+        <div class="readout">
+          <span
+            >Round <b id="round">0</b> / <span id="limit">—</span>, dev cost
+            <span id="cost" title="Estimated USD from TypeSafe input tokens"
+              >$0.000000</span
+            ></span
+          >
+          <span class="actions"
+            ><button id="pause" hidden>Pause</button
+            ><button id="new" hidden>New duel</button
+            ><span id="last">Jev’s move —</span></span
+          >
+        </div>
+        <p id="message" role="status" hidden></p>
+      </section>
+    </main>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

@@ -19,11 +19,13 @@ from data_access.api_queries import (
     get_total_games_count,
     get_top_apples_game
 )
+from services.duel_results import duel_results
 from database_postgres import get_connection
 
 load_dotenv()
 
 app = Flask(__name__)
+app.register_blueprint(duel_results)
 logging.basicConfig(level=logging.INFO)
 TOP_MATCH_CACHE_SECONDS = int(os.getenv("TOP_MATCH_CACHE_SECONDS", "900"))
 _top_apples_cache = {"timestamp": 0.0, "payload": None}
