@@ -1,3 +1,4 @@
+import { meterJev, localBudget, requestBudget } from "@/lib/play-ai/budget.mjs";
 import { checkDuelStorage } from "@/lib/play-ai/results.mjs";
 import { NextRequest, NextResponse } from "next/server";
 import { createDuelService } from "@/lib/play-ai/service.mjs";
@@ -11,8 +12,13 @@ const worker = globalThis as typeof globalThis & {
   snakeDuelGames?: Map<string, unknown>;
 };
 const duel = createDuelService(
-  (board: Parameters<typeof chooseMove>[0]) =>
-    chooseMove(board, process.env.TYPESAFE_API_KEY),
+  meterJev(
+    (board: Parameters<typeof chooseMove>[0]) =>
+      chooseMove(board, process.env.TYPESAFE_API_KEY),
+    process.env.NODE_ENV === "development" && !process.env.RAILWAY_ENVIRONMENT
+      ? localBudget()
+      : requestBudget,
+  ),
   (worker.snakeDuelGames ??= new Map()),
 );
 

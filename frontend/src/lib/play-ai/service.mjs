@@ -11,6 +11,12 @@ const SPEEDS = Object.freeze({
   Hard: 227.5,
   Extreme: 0,
 });
+const inputFields = new Map([
+  ["/game", ["id"]],
+  ["/state", ["id"]],
+  ["/plan", ["id", "tick", "speed"]],
+  ["/step", ["id", "tick", "direction"]],
+]);
 const ROUND_LIMIT = 450;
 
 export function newArena() {
@@ -97,7 +103,14 @@ export function createDuelService(
     };
   }
   return async function dispatch(path, input) {
-    if (!input || typeof input !== "object")
+    const fields = inputFields.get(path);
+    if (
+      !fields ||
+      !input ||
+      typeof input !== "object" ||
+      Array.isArray(input) ||
+      Object.keys(input).some((key) => !fields.includes(key))
+    )
       throw fail(400, "Invalid request.");
     if (path === "/game") {
       for (const [id, g] of games)
@@ -163,6 +176,7 @@ export function createDuelService(
         await g.plan;
         return { ready: true, devCost: cost(g) };
       } catch (err) {
+        if (err.code === 429 || err.code === 503) throw err;
         const reason =
           err.name === "TimeoutError" ? "TypeSafe timed out." : err.message;
         throw fail(502, reason + " The board is paused.");
@@ -170,6 +184,7 @@ export function createDuelService(
     }
     if (
       !g.plan ||
+      typeof input.direction !== "string" ||
       !Object.hasOwn(DIRECTIONS, input.direction) ||
       opposite[g.arena.snakes[0].direction] === input.direction
     )
