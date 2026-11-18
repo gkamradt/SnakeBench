@@ -2,6 +2,10 @@ import { createServer } from "node:http";
 import { createDuelService } from "../../frontend/src/lib/play-ai/service.mjs";
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import {
+  meterJev,
+  localBudget,
+} from "../../frontend/src/lib/play-ai/budget.mjs";
 import { chooseMove } from "../../frontend/src/lib/play-ai/jev.mjs";
 
 const assets = new Map([
@@ -79,7 +83,9 @@ if (
   const key = process.env.TYPESAFE_API_KEY;
   if (!key) throw new Error("Set TYPESAFE_API_KEY before starting the duel.");
   const port = Number(process.env.PORT || 8794);
-  gameServer((board) => chooseMove(board, key)).listen(port, "127.0.0.1", () =>
-    console.log("Play at http://127.0.0.1:" + port),
+  gameServer(meterJev((board) => chooseMove(board, key), localBudget())).listen(
+    port,
+    "127.0.0.1",
+    () => console.log("Play at http://127.0.0.1:" + port),
   );
 }

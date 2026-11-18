@@ -47,3 +47,9 @@ where bucket_id = 'matches' and name like 'play-ai/results/%.json'
 group by 1
 order by 1 desc nulls last;
 ```
+
+## Public spending limit
+
+The browser sends game controls. The Next server owns the board, the pinned Jev model, the Choice question and the TypeSafe credential. Before each paid call the frontend reserves 65,536 input tokens from its allowance, the full default request context at Jev 1.14's $0.042 per million input tokens (output is free). After success it credits the unused part only when the provider reports usage. Errors, missing usage, abandoned turns and concurrent calls all remain covered.
+
+Apply `backend/migrations/play_ai_budget.sql` on the replay database before rollout. The Flask API grants blocks from one atomic PostgreSQL counter per UTC day. The default limit is $1 per day across all public Play AI games. Set `PLAY_AI_DAILY_USD` on the backend to change it; zero denies new grants. The frontend may finish spending previously granted tokens. Failed grants deny paid moves. Restarts discard unused grants. The counter measures reserved capacity, so it can reach the limit before the actual bill does. The local loopback experiment and development server use a process-local allowance. Recheck the price and context bound before changing the pinned model.

@@ -8,6 +8,7 @@ from uuid import UUID
 
 from flask import Blueprint, request
 
+from services.duel_budget import reserve_budget
 from services.supabase_client import get_supabase_client
 
 duel_results = Blueprint("duel_results", __name__)
@@ -46,14 +47,35 @@ def store_result(row):
     )
 
 
-@duel_results.post("/api/play-ai/results")
-def submit_result():
+def authorize_frontend():
     token = os.getenv("PLAY_AI_RESULT_TOKEN")
     if not token:
-        return {"error": "Duel result storage unavailable."}, 503
+        return {"error": "Play AI unavailable."}, 503
     auth = request.headers.get("Authorization", "").encode()
     if not hmac.compare_digest(auth, f"Bearer {token}".encode()):
         return {"error": "Unauthorized."}, 401
+
+
+@duel_results.post("/api/play-ai/budget")
+def allocate_budget():
+    denied = authorize_frontend()
+    if denied:
+        return denied
+    try:
+        grant = reserve_budget()
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Jev budget unavailable (%s)", type(exc).__name__)
+        return {"error": "Budget unavailable."}, 503
+    if not grant:
+        return {"error": "Daily budget exhausted."}, 429
+    return grant, 200, {"Cache-Control": "no-store"}
+
+
+@duel_results.post("/api/play-ai/results")
+def submit_result():
+    denied = authorize_frontend()
+    if denied:
+        return denied
     if not request.is_json:
         return {"error": "Expected JSON."}, 415
     payload = request.stream.read(2049)

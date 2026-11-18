@@ -60,6 +60,7 @@ export async function chooseMove(board, key, transport = fetch) {
   const request = moveRequest(board);
   const response = await transport("https://api.typesafe.ai/v1/systemone", {
     method: "POST",
+    redirect: "error",
     headers: {
       Authorization: "Bearer " + key,
       "Content-Type": "application/json",
