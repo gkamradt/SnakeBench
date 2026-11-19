@@ -4,6 +4,7 @@ const canvas = $("board"),
   ctx = canvas.getContext("2d");
 const arrows = { up: "↑", down: "↓", left: "←", right: "→" };
 const opposite = { up: "down", down: "up", left: "right", right: "left" };
+const offsets = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
 const keys = {
   ArrowUp: "up",
   ArrowDown: "down",
@@ -23,7 +24,7 @@ let match,
   heading,
   mode = "loading",
   epoch = 0,
-  committing = false,
+  submittedHeading = null,
   error = "";
 
 async function post(path, body) {
@@ -54,10 +55,33 @@ function draw(board) {
     ),
   });
 }
+// Show uncontested human movement immediately. The server still resolves both
+// snakes together, including every collision, apple, score and final result.
+function previewHumanMove(board, direction) {
+  const [human, jev] = board.snakes;
+  const [dx, dy] = offsets[direction];
+  const x = human.body[0][0] + dx;
+  const y = human.body[0][1] + dy;
+  const atHead = ([px, py]) => px === x && py === y;
+  const [jx, jy] = jev.body[0];
+  if (
+    x < 0 || x >= board.width || y < 0 || y >= board.height ||
+    human.body.some(atHead) || jev.body.some(atHead) ||
+    Math.abs(jx - x) + Math.abs(jy - y) === 1
+  ) return board;
+  const grows = board.apples.some(atHead);
+  const body = [[x, y], ...(grows ? human.body : human.body.slice(0, -1))];
+  return {
+    ...board,
+    apples: grows ? board.apples.filter((p) => !atHead(p)) : board.apples,
+    snakes: [{ ...human, body }, jev],
+  };
+}
+
 function render() {
   const board = match?.board;
   if (board) {
-    draw(board);
+    draw(submittedHeading && match.speeds[speed] ? previewHumanMove(board, submittedHeading) : board);
     showCost(match.devCost);
     $("you").textContent = board.snakes[0].score;
     $("jev").textContent = board.snakes[1].score;
@@ -94,13 +118,13 @@ function render() {
     loading: "Loading…",
     error: "Reconnect",
   }[mode];
-  $("play").disabled = mode === "loading" || committing;
+  $("play").disabled = mode === "loading" || submittedHeading !== null;
   const chooseSpeed = mode === "ready" || mode === "done";
   $("speeds").hidden = !chooseSpeed;
   $("play").hidden = chooseSpeed || mode === "live";
   $("pause").hidden = mode !== "live";
   $("new").hidden = mode !== "paused";
-  $("new").disabled = committing;
+  $("new").disabled = submittedHeading !== null;
 }
 
 function showCost(cost) {
@@ -137,7 +161,7 @@ function pause() {
   }
 }
 async function play(selectedSpeed = "Medium", label = selectedSpeed) {
-  if (committing || mode === "loading") return;
+  if (submittedHeading || mode === "loading") return;
   if (mode === "live") return pause();
   if (mode === "error") return reset();
   if (mode === "done") await reset();
@@ -149,6 +173,9 @@ async function play(selectedSpeed = "Medium", label = selectedSpeed) {
   mode = "live";
   error = "";
   const run = ++epoch;
+  const interval = match.speeds[speed];
+  let nextTick = performance.now() + interval;
+  let stepPending = false;
   render();
   try {
     while (run === epoch && mode === "live") {
@@ -163,19 +190,22 @@ async function play(selectedSpeed = "Medium", label = selectedSpeed) {
           showCost(plan.devCost);
         }
       });
-      const delay = match.speeds[speed];
-      if (delay) await Promise.all([planReady, sleep(delay)]);
+      const remaining = nextTick - performance.now();
+      if (remaining > 0) await Promise.all([planReady, sleep(remaining)]);
       else await planReady;
       if (run !== epoch) return;
-      committing = true;
-      const chosen = heading;
+      // Start the next interval at this tick. Network confirmation uses part
+      // of that interval; a late plan never creates a backlog of missed moves.
+      nextTick = performance.now() + interval;
+      submittedHeading = heading;
+      stepPending = true;
       try {
-        match = await post("/step", { ...turn, direction: chosen });
+        if (interval) draw(previewHumanMove(match.board, submittedHeading));
+        match = await post("/step", { ...turn, direction: submittedHeading });
+        stepPending = false;
       } finally {
-        committing = false;
+        submittedHeading = null;
       }
-      if (opposite[match.board.snakes[0].direction] === heading)
-        heading = chosen;
       if (match.board.done) {
         epoch++;
         mode = "done";
@@ -183,13 +213,14 @@ async function play(selectedSpeed = "Medium", label = selectedSpeed) {
       render();
     }
   } catch (err) {
-    if (run !== epoch) return;
-    mode = "paused";
+    if (run !== epoch && !stepPending) return;
+    mode = "loading";
     error = err.message;
+    render();
     try {
       match = await post("/state", { id: match.id });
       heading = match.board.snakes[0].direction;
-      if (match.board.done) mode = "done";
+      mode = match.board.done ? "done" : "paused";
     } catch {
       mode = "error";
     }
@@ -200,16 +231,15 @@ function steer(dir) {
   if (
     !match ||
     !["ready", "live", "paused"].includes(mode) ||
-    dir === opposite[match.board.snakes[0].direction]
+    dir === opposite[submittedHeading ?? match.board.snakes[0].direction]
   )
     return;
   heading = dir;
-  render();
 }
 document.addEventListener("keydown", (e) => {
   if (keys[e.key]) {
     e.preventDefault();
-    steer(keys[e.key]);
+    if (!e.repeat) steer(keys[e.key]);
   }
   if (e.code === "Space" && !(e.target instanceof HTMLButtonElement)) {
     e.preventDefault();

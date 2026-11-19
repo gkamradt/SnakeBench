@@ -17,7 +17,7 @@ Run the offline checks with `node --test experiments/jev-duel/duel.test.mjs`.
 
 Set `TYPESAFE_API_KEY` in the frontend server environment and run `npm run dev` from `frontend/`. Select **Play AI** in either navigation menu. This mode shares the duel engine with the standalone server and runs its own games in memory on one Node.js instance.
 
-Easy allows at least 910 ms per move, Medium 455 ms, and Hard 227.5 ms. Each timer runs alongside the Jev call. Real Time Jev commits the move as soon as Jev responds. All four speeds wait for Jev before advancing. The round counter shows cumulative estimated Jev cost in USD for this board: reported input tokens × $0.042 per million. Billing is counted when Jev answers, including a prepared move held during a pause. Reusing that move adds no charge. A plus sign indicates some requests lacked usage. Each new board starts at zero.
+Easy allows at least 910 ms per move, Medium 455 ms, and Hard 227.5 ms. The browser samples the latest legal input on each tick and previews uncontested human movement while the server confirms both snakes. Input during confirmation is buffered relative to the submitted direction. A late Jev plan delays that tick and starts a fresh interval. Real Time Jev commits the move as soon as Jev responds. All four speeds wait for Jev before advancing. The round counter shows cumulative estimated Jev cost in USD for this board: reported input tokens × $0.042 per million. Billing is counted when Jev answers, including a prepared move held during a pause. Reusing that move adds no charge. A plus sign indicates some requests lacked usage. Each new board starts at zero.
 
 ## Completed duel results
 
