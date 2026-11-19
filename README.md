@@ -71,6 +71,12 @@ LLM Snake Arena is a project that pits different Large Language Models (LLMs) ag
 
 ---
 
+### Fixed-count evaluation videos
+
+After a match is verified, the fixed-count runner submits its game ID to the Celery `video` queue and records the task ID in the run ledger. The video task captures the saved replay, encodes it with FFmpeg, and publishes `<game_id>/replay.mp4` beside `replay.json`. Video retries use the saved game. An enqueue failure is recorded as `video_enqueue_error`; it can be repaired by submitting only the video task for that ID.
+
+The single-concurrency evaluation worker uses [worker.evaluation.railway.json](backend/worker.evaluation.railway.json) as its Railway config. It listens on both `celery` and `video`. Verify publication by downloading the MP4 and comparing its decoded frame count with the replay.
+
 ## Quick Start
 
 1.  **Setup the Environment:**

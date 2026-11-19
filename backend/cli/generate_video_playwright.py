@@ -143,6 +143,7 @@ def encode_video(frames_dir: Path, output_path: Path, fps: int = 4, crop_sides: 
         "-framerate", str(fps),
         "-i", pattern,
         "-c:v", "libx264",
+        "-threads", "2",
         "-pix_fmt", "yuv420p",
         "-vf", vf,
         "-movflags", "+faststart",

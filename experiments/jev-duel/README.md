@@ -5,7 +5,7 @@ Run from the repository root with Node.js 22+ and a server-side `TYPESAFE_API_KE
 node experiments/jev-duel/server.mjs
 ```
 
-Open http://127.0.0.1:8794 and choose **Easy**, **Medium**, **Hard** or **Extreme** on the board to start. Steer with the arrow keys, WASD or a swipe on the board. Space starts at Medium, pauses, or resumes at the selected speed. Switching away from the tab pauses the duel. A move already submitted can finish.
+Open http://127.0.0.1:8794 and choose **Easy**, **Medium**, **Hard** or **Real Time Jev** on the board to start. Steer with the arrow keys, WASD or a swipe on the board. Space starts at Medium, pauses, or resumes at the selected speed. Switching away from the tab pauses the duel. A move already submitted can finish.
 
 This local mode uses the Program Snake engine on a 16 × 12 board with five apples. You play green, Jev plays blue. Both move simultaneously. Apples grow the snake and add one point. A longer snake wins a shared-head collision. Survival decides the winner first, then apples. Games last up to 450 moves.
 
@@ -17,13 +17,13 @@ Run the offline checks with `node --test experiments/jev-duel/duel.test.mjs`.
 
 Set `TYPESAFE_API_KEY` in the frontend server environment and run `npm run dev` from `frontend/`. Select **Play AI** in either navigation menu. This mode shares the duel engine with the standalone server and runs its own games in memory on one Node.js instance.
 
-Easy allows at least 910 ms per move, Medium 455 ms, and Hard 227.5 ms. Each timer runs alongside the Jev call. Extreme commits the move as soon as Jev responds. All four speeds wait for Jev before advancing. The round counter shows cumulative estimated Jev cost in USD for this board: reported input tokens × $0.042 per million. Billing is counted when Jev answers, including a prepared move held during a pause. Reusing that move adds no charge. A plus sign indicates some requests lacked usage. Each new board starts at zero.
+Easy allows at least 910 ms per move, Medium 455 ms, and Hard 227.5 ms. Each timer runs alongside the Jev call. Real Time Jev commits the move as soon as Jev responds. All four speeds wait for Jev before advancing. The round counter shows cumulative estimated Jev cost in USD for this board: reported input tokens × $0.042 per million. Billing is counted when Jev answers, including a prepared move held during a pause. Reusing that move adds no charge. A plus sign indicates some requests lacked usage. Each new board starts at zero.
 
 ## Completed duel results
 
 Local development writes one JSON file per finished game in `data/duel-results/` at the repository root. Override that directory with `DUEL_RESULTS_DIR`. The record contains a random game ID, UTC finish time, round count, end reason, and the human player's outcome (`win`, `loss`, or `tie`). Closing a tab or replacing an unfinished board produces no outcome.
 
-`minTickMs` is the selected minimum time per turn in milliseconds. It includes time spent waiting for Jev within that interval. Zero means Extreme. An older tab that never reported its speed has a null value. The server fixes the setting on the first plan. To count outcomes by pace from the repo root:
+`minTickMs` is the selected minimum time per turn in milliseconds. It includes time spent waiting for Jev within that interval. Zero means Real Time Jev. An older tab that never reported its speed has a null value. The server fixes the setting on the first plan. To count outcomes by pace from the repo root:
 
 ```sh
 find "${DUEL_RESULTS_DIR:-data/duel-results}" -name '*.json' -exec jq -r '[.minTickMs // "unknown", .humanOutcome] | @tsv' {} + | sort | uniq -c

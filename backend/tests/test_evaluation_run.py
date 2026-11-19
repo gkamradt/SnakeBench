@@ -26,6 +26,7 @@ class MemoryRedis:
 
 @pytest.fixture
 def harness(monkeypatch):
+    monkeypatch.setattr(run.generate_video_task, 'apply_async', MagicMock(return_value=MagicMock(id='video-task')))
     client = MemoryRedis()
     state = dict(id='run', model_id=7, model_slug='openai/gpt-6-astra',
                  games=10, completed=0, status='queued', results=[],
@@ -56,6 +57,9 @@ def test_ten_serial_games_no_eleventh_and_default_reasoning(harness):
         run.step.run('run', i)  # A duplicate delivery cannot spend again.
     run.step.run('run', 10)
     assert calls == [f'game-{i}' for i in range(10)]
+    assert [call.kwargs for call in run.generate_video_task.apply_async.call_args_list] == [
+        {'args': [f'game-{i}'], 'queue': 'video'} for i in range(10)
+    ]
     assert queued.call_count == 9
     mark.assert_called_once()
     assert mark.call_args.args[1:] == (7, 'ranked')
@@ -159,3 +163,14 @@ def test_verification_checks_evidence_before_accepting_game(monkeypatch, fault):
             run.verify_game(result, configs)
     else:
         assert run.verify_game(result, configs)['result'] == 'won'
+
+
+def test_video_enqueue_failure_preserves_verified_game(harness):
+    client, calls, queued, _ = harness
+    run.generate_video_task.apply_async.side_effect = ConnectionError()
+    run.step.run('run', 0)
+    run.step.run('run', 0)
+    state = json.loads(client.get(run.key('run')))
+    assert calls == ['game-0'] and state['completed'] == 1
+    assert state['results'][0]['video_enqueue_error'] == 'ConnectionError'
+    queued.assert_called_once()

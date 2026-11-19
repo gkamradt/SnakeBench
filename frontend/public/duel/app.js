@@ -17,6 +17,7 @@ const keys = {
 const integrated = location.pathname.startsWith("/duel/");
 document.documentElement.classList.toggle("embedded", integrated);
 let speed = "Medium";
+let speedLabel = "Medium";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let match,
   heading,
@@ -79,8 +80,8 @@ function render() {
       : "Draw";
   $("status").textContent = {
     ready: "Ready",
-    live: "Live · " + speed,
-    paused: "Paused · " + speed,
+    live: "Live · " + speedLabel,
+    paused: "Paused · " + speedLabel,
     done: outcome,
     loading: "Connecting",
     error: "Offline",
@@ -135,13 +136,16 @@ function pause() {
     render();
   }
 }
-async function play(selectedSpeed = "Medium") {
+async function play(selectedSpeed = "Medium", label = selectedSpeed) {
   if (committing || mode === "loading") return;
   if (mode === "live") return pause();
   if (mode === "error") return reset();
   if (mode === "done") await reset();
   if (!["ready", "paused"].includes(mode)) return;
-  if (mode === "ready") speed = selectedSpeed;
+  if (mode === "ready") {
+    speed = selectedSpeed;
+    speedLabel = label;
+  }
   mode = "live";
   error = "";
   const run = ++epoch;
@@ -240,7 +244,7 @@ canvas.addEventListener("pointerup", (event) => {
 });
 $("pause").onclick = pause;
 for (const button of $("speeds").querySelectorAll("button")) {
-  button.onclick = () => play(button.textContent);
+  button.onclick = () => play(button.value || button.textContent, button.textContent);
 }
 $("play").onclick = () => play();
 $("new").onclick = reset;

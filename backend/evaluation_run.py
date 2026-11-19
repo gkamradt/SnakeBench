@@ -3,7 +3,7 @@
 Opt in through SNAKEBENCH_RUN_ID / MODEL_SLUG / GAMES on a worker importing this
 module. Redis keeps the run and permanent step claims. A restart never starts
 the same run again; an interrupted/uncertain game requires operator inspection.
-No reasoning overrides, early placement stopping, extension games, or videos.
+Verified games enqueue a replay video. No reasoning overrides, early placement stopping or extension games.
 """
 
 import argparse
@@ -28,6 +28,7 @@ from placement_system import (
     get_ranked_pool, rebuild_state_from_history, select_next_opponent_with_reason,
 )
 from services.supabase_storage import get_replay_public_url
+from tasks import generate_video_task
 
 logger = get_task_logger(__name__)
 PARAMS = dict(width=10, height=10, max_rounds=100, num_apples=5)
@@ -205,6 +206,13 @@ def step(run_id, index):
         if result['game_id'] != params['game_id']:
             raise RuntimeError('Engine game identity mismatch')
         verified = verify_game(result, (config, other))
+        # Rendering has its own retries. Never repeat a paid game on a media failure.
+        try:
+            job = generate_video_task.apply_async(args=[result['game_id']], queue='video')
+            verified['video_task_id'] = job.id
+        except Exception as error:
+            verified['video_enqueue_error'] = type(error).__name__
+            logger.exception('Could not enqueue video for verified game %s', result['game_id'])
         run['results'].append(verified)
         run['completed'] += 1
         if run['completed'] == run['games']:

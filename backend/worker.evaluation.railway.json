@@ -1,0 +1,12 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS",
+    "buildCommand": "pip install -r requirements.txt && apt-get update && apt-get install -y ffmpeg && PLAYWRIGHT_BROWSERS_PATH=0 python -m playwright install --with-deps --only-shell chromium"
+  },
+  "deploy": {
+    "startCommand": "env PLAYWRIGHT_BROWSERS_PATH=0 celery -A celery_app worker --include=evaluation_run --loglevel=info --concurrency=1 --queues=celery,video",
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  }
+}
