@@ -3,6 +3,7 @@ import os
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from playwright.sync_api import expect, sync_playwright
 
@@ -23,7 +24,7 @@ class BrowserTickTest(unittest.TestCase):
             steps, late_plans = [], []
 
             def respond(route):
-                name = route.request.url.rsplit("/", 1)[-1]
+                name = urlsplit(route.request.url).path.rsplit("/", 1)[-1]
                 if route.request.method == "GET":
                     route.fulfill(path=ASSETS / name)
                 elif name in ("game", "state"):
@@ -31,7 +32,7 @@ class BrowserTickTest(unittest.TestCase):
                 elif name == "plan" and board["tick"] == 2:
                     late_plans.append(route)
                 elif name == "plan":
-                    route.fulfill(json={"ready": True})
+                    route.fulfill(json={"ready": True, "devCost": {"usd": 0.0012345, "partial": True}, "averageLatencyMs": 84.6})
                 elif name == "step":
                     steps.append(route)
                 else:
@@ -65,9 +66,12 @@ class BrowserTickTest(unittest.TestCase):
                     "(c) => Array.from(c.getContext('2d').getImageData(210, 399, 1, 1).data)"
                 )
 
+            expect(page.locator("#latency")).to_have_text("—")
             empty = pixel()
             with page.expect_event("requestfinished", predicate=plan_finished):
                 medium.dispatch_event("click")
+            expect(page.locator("#latency")).to_have_text("85 ms")
+            expect(page.locator("#cost")).to_have_text("$0.0012+")
             # All of these arrive before the first tick. Preserve Up, revise
             # its second turn from Right to Left, and ignore a reversal of Up.
             for key in ("ArrowUp", "ArrowRight", "ArrowLeft", "ArrowDown"):

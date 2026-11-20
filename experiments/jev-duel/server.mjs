@@ -35,8 +35,9 @@ export function gameServer(choose) {
         req.headers.host !== "localhost:" + req.socket.localPort
       )
         throw fail(403, "Local play only.");
-      if (req.method === "GET" && assets.has(req.url)) {
-        const [name, type] = assets.get(req.url);
+      const asset = assets.get(req.url.split("?", 1)[0]);
+      if (req.method === "GET" && asset) {
+        const [name, type] = asset;
         return send(
           200,
           await readFile(new URL("./public/" + name, import.meta.url)),

@@ -34,7 +34,9 @@ test("Jev receives board-based options and a validated typed answer", async () =
       answers: { route: { type: "choice", choice } },
     });
   };
-  assert.deepEqual(await chooseMove(board, "mock", reply("up")), {
+  const { latencyMs, ...move } = await chooseMove(board, "mock", reply("up"));
+  assert.ok(Number.isFinite(latencyMs) && latencyMs >= 0);
+  assert.deepEqual(move, {
     direction: "up",
     inputTokens: 250,
   });
@@ -68,7 +70,7 @@ test("simultaneous ticks coalesce planning, reject stale turns, and pause on err
   const server = gameServer(async () => {
     calls++;
     if (calls === 2) throw Error("Provider busy.");
-    return { direction: "left", inputTokens: 500 };
+    return { direction: "left", inputTokens: 500, latencyMs: calls * 50 };
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -82,6 +84,7 @@ test("simultaneous ticks coalesce planning, reject stale turns, and pause on err
     });
   const { id, devCost, roundLimit } = await (await post("/game", {})).json();
   assert.deepEqual(devCost, { usd: 0, partial: false });
+  assert.equal((await (await post("/state", { id })).json()).averageLatencyMs, null);
   assert.equal(roundLimit, 450);
   assert.equal(calls, 0);
   const turn = { id, tick: 0 };
@@ -103,6 +106,7 @@ test("simultaneous ticks coalesce planning, reject stale turns, and pause on err
   const state = await (
     await post("/step", { ...turn, direction: "up" })
   ).json();
+  assert.equal(state.averageLatencyMs, 50);
   assert.deepEqual(state.devCost, { usd: 0.000021, partial: false });
   assert.deepEqual(
     state.board.snakes.map((s) => s.body[0]),
@@ -114,11 +118,14 @@ test("simultaneous ticks coalesce planning, reject stale turns, and pause on err
   assert.equal((await post("/step", { ...turn, direction: "up" })).status, 409);
   assert.equal((await post("/plan", { id, tick: 1 })).status, 502);
   const paused = await (await post("/state", { id })).json();
+  assert.equal(paused.averageLatencyMs, 50);
   assert.equal(paused.board.tick, 1);
   assert.deepEqual(paused.devCost, { usd: 0.000021, partial: true });
   const retry = await (await post("/plan", { id, tick: 1 })).json();
+  assert.equal(retry.averageLatencyMs, 100);
   assert.deepEqual(retry.devCost, { usd: 0.000042, partial: true });
   const next = await (await post("/game", { id })).json();
+  assert.equal(next.averageLatencyMs, null);
   assert.deepEqual(next.devCost, { usd: 0, partial: false });
 });
 

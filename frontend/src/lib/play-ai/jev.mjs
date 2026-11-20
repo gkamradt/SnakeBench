@@ -58,6 +58,7 @@ export function moveRequest(board) {
 
 export async function chooseMove(board, key, transport = fetch) {
   const request = moveRequest(board);
+  const started = performance.now();
   const response = await transport("https://api.typesafe.ai/v1/systemone", {
     method: "POST",
     redirect: "error",
@@ -84,5 +85,5 @@ export async function chooseMove(board, key, transport = fetch) {
     throw Object.assign(new Error("TypeSafe returned an invalid move."), {
       inputTokens,
     });
-  return { direction: answer.choice, inputTokens };
+  return { direction: answer.choice, inputTokens, latencyMs: performance.now() - started };
 }

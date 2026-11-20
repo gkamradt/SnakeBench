@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>You vs Jev · SnakeBench</title>
-    <link rel="stylesheet" href="./style.css" />
+    <link rel="stylesheet" href="./style.css?v=metrics1" />
   </head>
   <body>
     <main>
@@ -31,6 +31,10 @@
         </div>
       </section>
       <section class="court card" aria-label="Game arena">
+        <div class="readout metrics">
+          <span>dev cost <span id="cost" title="Estimated USD from TypeSafe input tokens">—</span></span>
+          <span title="Mean server-to-Jev response time for successful moves in this game">average dev latency <span id="latency">—</span></span>
+        </div>
         <div class="surface">
           <canvas
             id="board"
@@ -54,12 +58,7 @@
           <button id="play" class="primary overlay" disabled>Loading…</button>
         </div>
         <div class="readout">
-          <span
-            >Round <b id="round">0</b> / <span id="limit">—</span>, dev cost
-            <span id="cost" title="Estimated USD from TypeSafe input tokens"
-              >$0.000000</span
-            ></span
-          >
+          <span>Round <b id="round">0</b> / <span id="limit">—</span></span>
           <span class="actions"
             ><button id="pause" hidden>Pause</button
             ><button id="new" hidden>New duel</button
@@ -69,6 +68,6 @@
         <p id="message" role="status" hidden></p>
       </section>
     </main>
-    <script type="module" src="./app.js"></script>
+    <script type="module" src="./app.js?v=metrics1"></script>
   </body>
 </html>

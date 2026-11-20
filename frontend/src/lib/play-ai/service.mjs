@@ -60,10 +60,13 @@ function recordUsage(game, inputTokens) {
   else game.missingUsage = true;
 }
 
-function cost(game) {
+function metrics(game) {
   return {
-    usd: (game.inputTokens * INPUT_USD_PER_MILLION) / 1_000_000,
-    partial: game.missingUsage,
+    devCost: {
+      usd: (game.inputTokens * INPUT_USD_PER_MILLION) / 1_000_000,
+      partial: game.missingUsage,
+    },
+    averageLatencyMs: game.timedMoves ? game.totalLatencyMs / game.timedMoves : null,
   };
 }
 
@@ -98,7 +101,7 @@ export function createDuelService(
       board: game.arena.snapshot(),
       roundLimit: game.arena.config.maxTicks,
       speeds: game.speeds ?? SPEEDS,
-      devCost: cost(game),
+      ...metrics(game),
       result: game.arena.done ? game.arena.result() : null,
     };
   }
@@ -133,6 +136,8 @@ export function createDuelService(
         plan: null,
         inputTokens: 0,
         missingUsage: false,
+        timedMoves: 0,
+        totalLatencyMs: 0,
         seen: Date.now(),
       };
       games.set(g.id, g);
@@ -162,7 +167,11 @@ export function createDuelService(
       // Coalesce duplicate requests for the same position. Never reveal Jev's move early.
       if (!g.plan) {
         g.plan = choose(g.arena.snapshot())
-          .then(({ direction, inputTokens }) => {
+          .then(({ direction, inputTokens, latencyMs }) => {
+            if (Number.isFinite(latencyMs) && latencyMs >= 0) {
+              g.timedMoves = (g.timedMoves ?? 0) + 1;
+              g.totalLatencyMs = (g.totalLatencyMs ?? 0) + latencyMs;
+            }
             recordUsage(g, inputTokens);
             return direction;
           })
@@ -174,7 +183,7 @@ export function createDuelService(
       }
       try {
         await g.plan;
-        return { ready: true, devCost: cost(g) };
+        return { ready: true, ...metrics(g) };
       } catch (err) {
         if (err.code === 429 || err.code === 503) throw err;
         const reason =

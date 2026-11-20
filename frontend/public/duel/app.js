@@ -82,7 +82,7 @@ function render() {
   const board = match?.board;
   if (board) {
     draw(submittedHeading && match.speeds[speed] ? previewHumanMove(board, submittedHeading) : board);
-    showCost(match.devCost);
+    showMetrics(match);
     $("you").textContent = board.snakes[0].score;
     $("jev").textContent = board.snakes[1].score;
     $("round").textContent = board.tick;
@@ -127,13 +127,15 @@ function render() {
   $("new").disabled = submittedHeading !== null;
 }
 
-function showCost(cost) {
+function showMetrics({ devCost: cost, averageLatencyMs }) {
+  const latency = $("latency");
+  if (latency) latency.textContent = Number.isFinite(averageLatencyMs) ? Math.round(averageLatencyMs) + " ms" : "—";
   const label = $("cost");
   if (!cost) {
     label.textContent = "unavailable";
     return;
   }
-  label.textContent = "$" + cost.usd.toFixed(6) + (cost.partial ? "+" : "");
+  label.textContent = "$" + cost.usd.toFixed(4) + (cost.partial ? "+" : "");
   label.title = cost.partial
     ? "Estimated USD for reported input tokens. Some usage is unavailable."
     : "Estimated USD from TypeSafe input tokens.";
@@ -187,7 +189,8 @@ async function play(selectedSpeed = "Medium", label = selectedSpeed) {
           plan.devCost
         ) {
           match.devCost = plan.devCost;
-          showCost(plan.devCost);
+          match.averageLatencyMs = plan.averageLatencyMs;
+          showMetrics(match);
         }
       });
       const remaining = nextTick - performance.now();
