@@ -20,8 +20,8 @@ document.documentElement.classList.toggle("embedded", integrated);
 let speed = "Medium";
 let speedLabel = "Medium";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const turns = [];
 let match,
-  heading,
   mode = "loading",
   epoch = 0,
   submittedHeading = null,
@@ -145,7 +145,7 @@ async function reset() {
   render();
   try {
     match = await post("/game", { id: match?.id });
-    heading = match.board.snakes[0].direction;
+    turns.length = 0;
     mode = "ready";
   } catch (err) {
     mode = "error";
@@ -197,7 +197,7 @@ async function play(selectedSpeed = "Medium", label = selectedSpeed) {
       // Start the next interval at this tick. Network confirmation uses part
       // of that interval; a late plan never creates a backlog of missed moves.
       nextTick = performance.now() + interval;
-      submittedHeading = heading;
+      submittedHeading = turns.shift() ?? match.board.snakes[0].direction;
       stepPending = true;
       try {
         if (interval) draw(previewHumanMove(match.board, submittedHeading));
@@ -219,7 +219,7 @@ async function play(selectedSpeed = "Medium", label = selectedSpeed) {
     render();
     try {
       match = await post("/state", { id: match.id });
-      heading = match.board.snakes[0].direction;
+      turns.length = 0;
       mode = match.board.done ? "done" : "paused";
     } catch {
       mode = "error";
@@ -228,13 +228,21 @@ async function play(selectedSpeed = "Medium", label = selectedSpeed) {
   }
 }
 function steer(dir) {
-  if (
-    !match ||
-    !["ready", "live", "paused"].includes(mode) ||
-    dir === opposite[submittedHeading ?? match.board.snakes[0].direction]
-  )
+  if (!match || !["ready", "live", "paused"].includes(mode)) return;
+  const moving = submittedHeading ?? match.board.snakes[0].direction;
+  const first = turns[0];
+  if (!first) {
+    if (dir !== moving && dir !== opposite[moving]) turns.push(dir);
     return;
-  heading = dir;
+  }
+  if (dir === first) return;
+  if (dir === opposite[first]) {
+    // Until a single pending corner is taken, the other side is a legal edit.
+    if (turns.length === 1 && dir !== moving && dir !== opposite[moving]) turns[0] = dir;
+    return;
+  }
+  // Keep the first corner. The latest legal key chooses the square after it.
+  turns[1] = dir;
 }
 document.addEventListener("keydown", (e) => {
   if (keys[e.key]) {

@@ -68,13 +68,17 @@ class BrowserTickTest(unittest.TestCase):
             empty = pixel()
             with page.expect_event("requestfinished", predicate=plan_finished):
                 medium.dispatch_event("click")
-            page.keyboard.press("ArrowUp")
+            # All of these arrive before the first tick. Preserve Up, revise
+            # its second turn from Right to Left, and ignore a reversal of Up.
+            for key in ("ArrowUp", "ArrowRight", "ArrowLeft", "ArrowDown"):
+                page.keyboard.press(key)
             page.clock.run_for(454)
             self.assertFalse(steps)
             page.clock.run_for(1)
             self.assertNotEqual(pixel(), empty)  # Visible before the step's HTTP response.
+            # Left is still pending. It can be revised while Up is in flight.
+            page.keyboard.press("ArrowRight")
             page.keyboard.press("ArrowLeft")
-            page.keyboard.press("ArrowDown")  # Invalid reversal of the submitted Up.
             page.dispatch_event("body", "keydown", {"key": "ArrowUp", "repeat": True})
             page.clock.run_for(100)
             with page.expect_event("requestfinished", predicate=plan_finished):
@@ -89,16 +93,19 @@ class BrowserTickTest(unittest.TestCase):
             # A slow plan postpones one tick; the next gets a full interval.
             page.clock.run_for(700)
             self.assertEqual(len(steps), 2)
+            page.keyboard.press("ArrowDown")
+            page.keyboard.press("ArrowLeft")
             wait_routes(late_plans, 1)
             with page.expect_request("**/step"):
                 late_plans[0].fulfill(json={"ready": True})
             with page.expect_event("requestfinished", predicate=plan_finished):
-                accept("left", [1, 6])
+                accept("down", [2, 7])
             page.clock.run_for(454)
             self.assertEqual(len(steps), 3)
             with page.expect_request("**/step"):
                 page.clock.run_for(1)
             wait_routes(steps, 4)
+            self.assertEqual(steps[-1].request.post_data_json["direction"], "left")
             page.locator("#pause").dispatch_event("click")
             with page.expect_event("requestfinished", predicate=lambda req: req.url.endswith("/state")):
                 steps[-1].fulfill(status=503, json={"error": "Simulated network failure"})
