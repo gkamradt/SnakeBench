@@ -198,10 +198,10 @@ button:disabled {
 .readout {
   flex-wrap: wrap;
 }
-.readout.metrics {
-  justify-content: flex-start;
-  column-gap: 16px;
-  margin: 0 3px 8px;
+.metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
 }
 .readout button {
   font: inherit;
